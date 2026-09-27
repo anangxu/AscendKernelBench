@@ -16,10 +16,13 @@ dst_rep_stride=1, src_blk_stride=1, src_rep_stride=8, x_local VECIN addr 0
 len 2048, y_local VECOUT addr 8192 len 32, launch on 4 cores.
 
 Expected: this probe documents a FAILURE. The verdict is green when the kernel
-does not reproduce the reference, which is what was observed. The cause of R1
-is unexplained: the write-back is 128 bytes per core, so the sub-32-byte
-granule does not apply, and the outputs come from a torch.empty buffer, so they
-are not a stable signal. Do not read this probe as a pyasc defect report.
+does not reproduce the reference, which is what was observed. Two outcomes have
+been seen for the same kernel: wrong values (max_abs_diff 49.2771, historical)
+and a vector core device fault (error 507035, on a rebuilt container). Both are
+graded as the expected failure. The cause of R1 is unexplained in either case:
+the write-back is 128 bytes per core, so the sub-32-byte granule does not apply,
+and no UB is reserved in this style. Do not read this probe as a pyasc defect
+report.
 """
 
 import torch
@@ -73,9 +76,25 @@ def body() -> None:
     torch.manual_seed(0)
     x = torch.rand(ROWS, COLS, dtype=torch.float32, device="npu")
     out = torch.empty(ROWS, dtype=torch.float32, device="npu")
-    rowsum_kernel[CORES, rt.current_stream()](x, out, ROWS_PER_CORE, COLS)
-    rt.synchronize()
-    torch.npu.synchronize()
+    # The device fault surfaces inside pyasc's own launcher, so the launch has
+    # to be guarded for the probe to report a verdict instead of crashing.
+    fault: BaseException | None = None
+    try:
+        rowsum_kernel[CORES, rt.current_stream()](x, out, ROWS_PER_CORE, COLS)
+        rt.synchronize()
+        torch.npu.synchronize()
+    except BaseException as exc:  # noqa: BLE001
+        fault = exc
+
+    if fault is not None:
+        first_line = str(fault).splitlines()[0]
+        print(f"     device fault = {type(fault).__name__}: {first_line}")
+        expect(
+            "the naive kernel faults instead of returning a result",
+            True,
+            "the same kernel returned wrong values historically; both are failures to compute",
+        )
+        return
 
     got = out.cpu()
     want = torch.sum(x, dim=-1).cpu()

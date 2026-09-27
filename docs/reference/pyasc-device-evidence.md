@@ -57,33 +57,67 @@ module's globals rather than from an enclosing function's locals.
 
 ## Verification status
 
-| Probe | Historical | Re-run in this round |
-| --- | --- | --- |
-| `probe_rowsum_shapes.py` | accepted shapes matched, refused shapes raised | 15/15 expectations held |
-| `probe_s1_tque_copy_roundtrip.py` | passed | not re-run (see below) |
-| `probe_r01_rowsum_naive.py` | reproduced the failure | not re-run |
-| `probe_r02_reduce_identity_input.py` | reproduced the failure | not re-run |
-| `probe_r03_r02_plus_sync.py` | sentinel survived | not re-run |
-| `probe_r04_explicit_copy.py` | sentinels survived | not re-run |
-| `probe_r05_ub_reservation.py` | sentinels survived | not re-run |
-| `probe_r06_full_writeback.py` | wrote uninitialised UB | not re-run |
-| `probe_r07_reduce_vs_expected.py` | matched the closed form | not re-run |
-| `probe_r08_multicore_vs_torch.py` | matched `torch.sum` exactly | not re-run |
-| `probe_r09_writeback_length.py` | 4/16 B silent, 32/64 B exact | not re-run |
-| `probe_r10_pipe_event.py` | `MTE2_MTE3` exact, `MTE2_V` not | not re-run |
-| `probe_dtype_bypass.py` | bfloat16 and bool rejected | not re-run |
+The probes were re-run on a rebuilt container (the instance was reclaimed and
+recreated between sessions; the venv was rebuilt with pyasc 1.1.1 and the
+versions below were re-confirmed). Results:
 
-**Blocker, recorded honestly.** The first re-run attempt exposed two structural
-defects that only appear on a device: stringified annotations from the
-`from __future__ import annotations` style convention, and `asc` resolved as a
-function local instead of a module global. Both are fixed in the committed
-probes, and the fixed set has **not** been re-run: the Ascend host stopped
-accepting connections (`Connection closed by <host> port 31583`, three attempts)
-mid-run and the instance appears to have been reclaimed. Until someone runs the
-loop above on a live host, treat the re-run column as pending for every probe
-except `probe_rowsum_shapes.py`. The historical outputs below are unaffected:
-they were measured with the original scripts, which already had the module-level
-structure.
+| Probe | Historical | Re-run |
+| --- | --- | --- |
+| `probe_dtype_bypass.py` | bfloat16 and bool rejected | PASS |
+| `probe_rowsum_shapes.py` | accepted shapes matched, refused shapes raised | PASS (15/15, twice) |
+| `probe_r02_reduce_identity_input.py` | reproduced the failure | PASS |
+| `probe_r03_r02_plus_sync.py` | sentinel survived | PASS |
+| `probe_r04_explicit_copy.py` | sentinels survived | PASS |
+| `probe_r05_ub_reservation.py` | sentinels survived | PASS |
+| `probe_r06_full_writeback.py` | wrote uninitialised UB | PASS |
+| `probe_r09_writeback_length.py` | 4/16 B silent, 32/64 B exact | PASS |
+| `probe_r10_pipe_event.py` | `MTE2_MTE3` exact, `MTE2_V` not | PASS |
+| `probe_r01_rowsum_naive.py` | wrong values | PASS both ways: returned wrong values once and faulted the vector core once |
+| `probe_s1_tque_copy_roundtrip.py` | passed | **intermittent** (see below) |
+| `probe_r07_reduce_vs_expected.py` | matched the closed form | **intermittent** control; the reduce matched in every run |
+| `probe_r08_multicore_vs_torch.py` | matched `torch.sum` exactly | **intermittent** (see below) |
+
+## Open anomaly: intermittent wrong write-backs in the TQue style
+
+On the rebuilt container the TQue copy path wrote stale, zero, or garbage data
+in some sessions and was exact in others. Counts, from a shell loop of
+standalone runs:
+
+| Observation | Result |
+| --- | --- |
+| `probe_s1_tque_copy_roundtrip.py`, 10 consecutive runs | 0 pass, 10 fail (zeros, stale values, or garbage) |
+| `probe_r07_reduce_vs_expected.py`, 5 runs | control failed 5/5; `whole_reduce_sum` matched the closed form every time |
+| `probe_r08_multicore_vs_torch.py`, 5 runs | 0 pass, 5 fail, deterministic `max_abs_diff = 38` for rows=128/cores=4 |
+| Same R8 kernel, 4 launches in one process | 4/4 exact |
+| The same copy kernel as a standalone script, 3 processes x 3 launches with different inputs | 9/9 exact, and each launch saw its own input |
+| `probe_s1` with a fresh `PYASC_CACHE_DIR`, 3 runs | fail, fail, pass |
+| Full probe set, two runs | run 1: only R1 red; run 2: R7, R8, S1 red |
+
+What this rules out, and what it does not:
+
+* **Not a stale cache.** A fresh cache directory reproduced both outcomes.
+* **Not result reuse within a process.** Every launch saw its own input.
+* **Not the reduce.** `whole_reduce_sum` produced the exact closed form in every
+  run in which it was reached, including runs whose copy control failed.
+* **Not reproducible per kernel.** The same kernel that failed 10/10 as
+  `probe_s1` passed 9/9 as a standalone script.
+
+The engine path was checked on the same container: the harness run of the
+bundled example passed (`pyasc_rowsum`, `pyasc_add`, `pyasc_relu` all
+`compiled=True, correctness=True`).
+
+**Unresolved.** Whether this is a timing-sensitive defect in pyasc's TQue
+handling, an artifact of this container's device state, or something about how
+the probe modules are invoked is not determined, and this page does not claim
+pyasc is defective. Until it is resolved, treat the TQue copy round trip and the
+exactness of small TQue write-backs as conditional on the session, not as
+settled facts. The reduction results in R7/R8 that matter to the engine (the
+per-repeat semantics, the mask and stride semantics) still reproduced.
+
+The next step, one variable at a time, is to run `probe_s1` twenty times in one
+shell and the identical kernel standalone twenty times in the same session: if
+the two disagree, the difference is in how the probe is invoked rather than in
+the kernel, and if they agree but both fail, the device state is the variable.
 
 ## The experiments
 
@@ -243,23 +277,3 @@ Boundary: representative, not exhaustive. The accepted range is `cols` in
    an LLM writes with pyasc is a separate, unmeasured question.
 5. **Cross-platform comparison.** Nothing on this page is a GPU-versus-NPU
    result.
-
-## Blocked work
-
-The corrected probe set still needs one live-host run. On the host used here the
-two structural defects documented under "Running a probe" were found and fixed,
-but the instance stopped accepting connections mid-run, so the fixed files have
-only been syntax-checked and reviewed by inspection. Expected runtime is a few
-minutes: thirteen probes, each compiling a handful of small kernels.
-
-Commands to finish it, from a checkout root on an Ascend host:
-
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-cd experiments/pyasc_device_probes
-for probe in probe_*.py; do echo "### $probe"; python "$probe" || echo "FAILED: $probe"; done
-```
-
-A probe that fails for a reason other than its own expectations (an import
-error, a `TypeError` from the annotation issue, a `NameError` for a kernel
-global) means the probe structure regressed, not that a measured fact changed.

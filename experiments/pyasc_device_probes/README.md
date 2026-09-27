@@ -38,7 +38,7 @@ compiles on the first subscripted call.
 | Probe | Expectation | Historical result |
 | --- | --- | --- |
 | `probe_s1_tque_copy_roundtrip.py` | TQue GM -> UB -> GM round trip is bit exact | passes |
-| `probe_r01_rowsum_naive.py` | the naive explicit-address row sum does **not** match `torch.sum(dim=-1)` | fails (cause unexplained) |
+| `probe_r01_rowsum_naive.py` | the naive explicit-address row sum does **not** produce a usable result: it returns wrong values, or it faults the vector core | fails both ways (cause unexplained) |
 | `probe_r02_reduce_identity_input.py` | the R2 kernel does not reproduce the closed-form expectations | fails; its zero-initialised buffer cannot tell "wrote 0" from "wrote nothing" |
 | `probe_r03_r02_plus_sync.py` | adding pipe sync alone still leaves the sentinel intact | sentinel survives |
 | `probe_r04_explicit_copy.py` | with explicit addresses the copy round trip writes nothing | sentinel survives |
@@ -54,3 +54,12 @@ compiles on the first subscripted call.
 Probes that document a historical failure assert the **observation** (for
 example "the sentinel survived"), not correctness, so a green verdict means the
 finding reproduced. Their docstrings state which variable each one changes.
+
+**Known anomaly.** On a rebuilt container the TQue copy path wrote stale, zero,
+or garbage data in some sessions and was exact in others: `probe_s1` failed
+10/10 in one shell loop and the same kernel passed 9/9 standalone in another,
+while `whole_reduce_sum` matched the closed form every time. A fresh
+`PYASC_CACHE_DIR` reproduced both outcomes, so the cache is not the cause. Until
+it is resolved, treat the TQue copy round trip as conditional on the session.
+The counts and what was ruled out are in
+[`docs/reference/pyasc-device-evidence.md`](../../docs/reference/pyasc-device-evidence.md).
