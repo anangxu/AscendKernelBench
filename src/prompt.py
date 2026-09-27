@@ -153,6 +153,9 @@ Output exactly two fenced code blocks, tagged with their filenames:
      `asc.add(dst, a, b, count)`. A `data_copy` count is in elements; keep
      it to whole 32-byte blocks, because a shorter write-back can silently
      leave the destination unchanged on the target device;
+   - a kernel whose only work is a copy must wait for its own inbound copy
+     before writing back (`pipe.alloc_event_id(asc.HardEvent.MTE2_MTE3)` for the
+     id); a single queue carries no such dependency;
    - `asc.set_flag(asc.HardEvent.MTE2_V, id)` and
      `asc.wait_flag(asc.HardEvent.MTE2_V, id)` when explicit pipe
      synchronization is needed, choosing the event that matches the

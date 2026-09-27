@@ -77,89 +77,108 @@ versions below were re-confirmed). Results:
 | `probe_r07_reduce_vs_expected.py` | matched the closed form | **intermittent** control; the reduce matched in every run |
 | `probe_r08_multicore_vs_torch.py` | matched `torch.sum` exactly | **intermittent** (see below) |
 
-## Open anomaly: two TQue copy failure modes
+## Open anomaly: TQue copies that carry no MTE2 to MTE3 dependency
 
-The TQue copy path produced wrong output in several sessions while the same
-sizes were exact through explicit addresses. Two manifestations were seen, and
-they are recorded separately because they have different evidence.
+Two manifestations are recorded separately. The first now has a supported
+mechanism and a workaround; the second stays unexplained.
 
-### A. A write-back of roughly 16 KiB or more drops whole chunks
+### A. The TQue copy emits no dependency between the inbound and outbound copy
 
-Provoked on demand, so this needs counts rather than rate studies. Each line is
-five launches of a copy within one process, reporting how many output elements
-were still holding the sentinel (never written):
+The pure-copy idiom used by several probes copies GM to UB through a single
+VECIN queue and then copies UB to GM. The IR handed to the compiler for that
+function contains no `set_flag`, `wait_flag` or other sync op at all:
 
-| Write-back size | TQue (`enque`/`deque`) missing per launch | Explicit address + `MTE2_MTE3` |
+```text
+%4 = ascendc.que_bind.alloc_tensor %3
+ascendc.data_copy_l2 %4, %0, %c4096_i32      // GM -> UB, MTE2
+ascendc.que_bind.enque_tensor %3, %4
+%5 = ascendc.que_bind.deque_tensor %3
+ascendc.data_copy_l2 %1, %5, %c4096_i32      // UB -> GM, MTE3
+ascendc.que_bind.free_tensor %3, %5
+```
+
+`_dump_ir.py` hooks both `_run_codegen` and `_run_compiler`; both stages show
+zero sync ops for this function. The explicit-address kernel, by contrast, hands
+the compiler `ascendc.set_flag mte2_mte3` and `ascendc.wait_flag mte2_mte3`
+between its two copies. Scope: this is the IR at the compiler boundary. The
+`que_bind` ops could still be lowered into synchronised code inside the
+compiler, so this is strong evidence rather than proof about the final binary.
+
+Behaviour agrees. `_tque_event_contrast.py` changes exactly one thing, an
+`MTE2_MTE3` flag pair whose id comes from `pipe.alloc_event_id(...)` so it cannot
+collide with a framework-owned event, and runs each arm at the sizes that
+trigger the dropped chunks, one sentinel value per repetition:
+
+| Arm | 16 KiB, 5 launches | 64 KiB, 5 launches |
 | --- | --- | --- |
-| 16 KiB | `[0, 0, 1032, 0, 1032]` | `[0, 0, 0, 0, 0]` |
-| 32 KiB | `[256, 256, 0, 256, 0]` | not run |
-| 64 KiB | `[128, 0, 128, 0, 128]` | `[0, 0, 0, 0, 0]` |
-| 128 KiB | `[0, 0, 0, 0, 0]` once, `3072` missing in an earlier single launch | `[0, 0, 0, 0, 0]` |
+| TQue idiom alone | 0 wrong | **5/5 wrong** (wrong counts 1920, 1280, 256, 4224, 2560) |
+| plus an allocated `MTE2_MTE3` pair | 0 wrong | **0 wrong in all 10 launches** |
 
-The lost elements are contiguous chunks that never get written, and the loss is
-not deterministic per launch. The explicit-address path was exact in all fifteen
-launches at the same sizes, with the same input, dtype, device, stream and
-sentinel, so the buffer-management style is the variable, not `data_copy` and
-not the size on its own.
+So the corruption is not `data_copy`, not the size on its own and not
+undetermined: a pure copy through one queue carries no MTE2 to MTE3 dependency,
+and adding one removes it in every launch of the comparison.
 
-The bundled example `003_rowsum` was then run ten times at its own shape
-(512x64, a 2 KiB write-back) through its own launcher: 10/10 exact, no sentinel
-left. Its write-back sits below the size class that dropped chunks; that is a
-statement about this shape, not a guarantee for other shapes.
+#### Cross-stream ordering was tested and excluded for this phenomenon
+
+A plausible alternative was that PyTorch fills the output and the kernel launches
+without being ordered against that fill, so a sentinel block would mean "the
+fill landed last", not "the kernel never wrote". `_presync_contrast.py` adds one
+line, `torch.npu.synchronize()` before the launch, and reads the buffer back to
+prove the fill completed (`fill_complete=True` in every run). The dropped chunks
+persist under that control, with residue values matching **other repetitions'
+sentinels**, which is recycled memory rather than the current fill. The
+alternative is therefore not the explanation here. It had to be tested, and it
+was.
 
 ### B. A small write-back occasionally reads stale or missing data
 
-This is the original observation and it is still unexplained. Across the first
-sessions the following were seen at small sizes (64 to 1024 elements):
+Still unexplained and parked. Observed at small sizes (64 to 1024 elements):
+`probe_s1` failed 10 consecutive launches in one shell loop while the same
+kernel passed 9/9 standalone with different inputs; `probe_r08` failed 5/5 in
+one session and passed 4/4 inside one process in another; `probe_r07`'s copy
+control failed while its `whole_reduce_sum` matched the closed form; one
+entry-point run wrote 64 wrong elements whose maximum error was exactly the
+offset an earlier experiment had used.
 
-* `probe_s1` failed 10 consecutive launches in one shell loop, with zeros, stale
-  values, or garbage; the same kernel passed 9/9 as a standalone script with
-  different inputs, each launch returning its own input.
-* `probe_r08` failed 5/5 with a stable error in one session and passed 4/4 in
-  one process in another.
-* `probe_r07`'s copy control failed while its `whole_reduce_sum` matched the
-  closed form every time.
-* One entry-point run wrote 64 wrong elements with a maximum error of exactly
-  the offset an earlier experiment had used, which is what stale UB content
-  looks like.
-* A priming probe (launch A, then launch B with different values) returned
-  `arange(64)` on its first iteration, which was neither input but the residue
-  of an earlier process. That run followed a killed runner, so it is recorded as
-  a lead, not as clean evidence.
+Caveat on reading that fingerprint: stale numbers could come from a previous GM
+input or from a reused output buffer, not necessarily from stale UB. Matching
+values against a per-repetition marker, as the new contrasts do, is what
+distinguishes them; the earlier records used a single sentinel and cannot.
 
 ### What the bounded contrasts support
 
-**Entry point.** `_ab_runner.sh` alternated the probe entry (A) and a direct
-entry (B) that imports the same kernel, pins input, shape, dtype, device,
-stream, synchronisation, sentinel, working directory and cache, and runs each in
-a fresh process: A 20/20 exact, B 19/20. One failure in forty does not separate
-the entries, so the entry point is not implicated. This also says nothing about
-the device: two entries behaving alike would not establish the device as the
-cause.
+| Hypothesis | Test | Outcome |
+| --- | --- | --- |
+| PyTorch fill not ordered against the launch | `_presync_contrast.py` | excluded for A: drops persist with the fill proven complete |
+| Missing MTE2 to MTE3 dependency inside the kernel | `_dump_ir.py`, `_tque_event_contrast.py` | supported for A: no sync op in the IR, and an allocated event pair removes the corruption |
+| Entry point (probe wrapper versus direct) | `_ab_runner.sh` | no difference observed: 20/20 versus 19/20 |
+| Cache state | fresh `PYASC_CACHE_DIR` | changing the cache is not sufficient to remove it; this does not clear the cache of involvement |
+| Queue depth and buffer byte count | not run | deliberately deferred: changing depth and size together moves the UB layout, the resource use and the timing at once |
 
-**Synchronisation.** `_ab_sync_runner.sh` contrasted the TQue idiom with the
-same kernel plus an explicit `MTE2_MTE3` pair, and was stopped part way at
-plain 27/27 and event 26/26. That contrast was underpowered by construction: a
-rare event cannot be resolved by running more launches of it. It was abandoned
-in favour of the size provocation above, which reproduces the defect in five
-launches.
+### Impact on the benchmark
 
-**Cache.** A fresh `PYASC_CACHE_DIR` reproduced both outcomes, so changing the
-cache is not sufficient to remove the problem. That is weaker than clearing the
-cache of involvement, which was not tested.
+The direction is not only false negatives. A false positive needs a wrong kernel
+to pass, and that can happen when a fixed seed regenerates the same inputs, when
+a warm-up leaves a correct result in the buffer, when the task output is
+constant or zero, or when a race simply does not fire during the trials. A
+kernel that is genuinely missing synchronisation being judged wrong is a correct
+rejection, not a false negative; only a harness that fails to order its own
+inputs could cause those.
 
-### Status and next variable
+The five correctness trials and the hidden gates catch a flaky kernel but cannot
+repair a race, and a diagnostic device-wide synchronise belongs in the
+correctness path, not in the timing loop where it would change the measured
+protocol.
 
-Unresolved and parked: manifestation B, and the mechanism behind A (whether the
-queue's buffer accounting, its synchronisation, or its DMA split is at fault).
-Neither is a claim that pyasc is defective, and no rate is quoted for either.
+### Status
 
-The next variable, if this is picked up again, is the TQue buffer accounting at
-large tiles: hold the kernel and the sizes fixed and change only the queue depth
-and the `init_buffer` byte count (`asc.TQue(pos, 1)` with `n * 4` versus depth 2
-with the matching count), then re-run the five-launch size sweep above. The
-explicit-address path is already exact at these sizes, so it is the reference
-point for what correct looks like.
+* **A**: mechanism supported, workaround known. Kernels whose only work is a copy
+  need an explicit, allocated `MTE2_MTE3` wait before the write-back, or the
+  copy has to keep a vector operation between the two copies as the reduction
+  and element-wise examples do.
+* **B**: parked, with the fingerprint caveat above.
+* The compiler-boundary IR question stays open: do the `que_bind` ops lower into
+  synchronised code inside the compiler, and if not, should they?
 
 ## The experiments
 

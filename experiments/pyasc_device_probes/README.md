@@ -65,19 +65,23 @@ row of green probes is not a row of correct operators.
 
 ## Known anomaly
 
-The TQue copy path has two failure modes on the container these records were
-re-measured on. A write-back of about 16 KiB or more drops whole chunks
-(provoked: five launches per size, 128 to 1032 elements never written), while the
-same sizes through explicit addresses with `MTE2_MTE3` were exact in fifteen
-launches. A small write-back also reads stale or missing data occasionally; that
-one is unexplained and parked. The bundled example was exact 10/10 at its own
-shape. Counts, what was ruled out, and the next variable are in
+A pure copy through a single VECIN queue carries **no MTE2 to MTE3 dependency**:
+the IR handed to the compiler has no sync op in that function, and at 64 KiB the
+idiom alone was wrong in 5 of 5 launches while the same kernel plus an allocated
+`MTE2_MTE3` pair was exact in 10 of 10. The explicit-address path is exact at the
+same sizes. A pre-launch `torch.npu.synchronize()` does not change it, so the
+sentinel blocks are not a late PyTorch fill. A second, smaller manifestation
+(stale or missing data at small write-backs) stays unexplained and parked, and a
+stale value cannot be attributed to UB without a per-repetition marker. Details,
+scope and what was excluded are in
 [`docs/reference/pyasc-device-evidence.md`](../../docs/reference/pyasc-device-evidence.md).
 
 ## Bounded contrasts
 
 `_ab_runner.sh` and `_ab_sync_runner.sh` are the A/B harnesses behind the
-anomaly section. They alternate two variants in fresh processes with the input,
+anomaly section; `_presync_contrast.py` tests the cross-stream ordering
+explanation, `_tque_event_contrast.py` the missing in-kernel dependency, and
+`_dump_ir.py` dumps the generated IR at both the codegen and compiler stages. They alternate two variants in fresh processes with the input,
 shape, dtype, device, stream, synchronisation, sentinel, working directory and
 cache pinned, and print one `METRICS` line per run. `_ab_entry_b.py` is the
 second entry point, `_ab_sync_variant.py` the two synchronisation variants.

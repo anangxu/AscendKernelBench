@@ -103,12 +103,15 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   exact one, so do not synchronise a copy against the vector pipe. The TQue
   style handles this internally and is the recommended idiom for generated
   kernels.
-* A TQue write-back of about 16 KiB or more dropped whole output chunks on the
-  device these facts were measured on, while the same sizes through explicit
-  addresses with `MTE2_MTE3` were exact. The bundled example's 2 KiB write-back
-  was exact in ten runs at its own shape. Keep TQue write-backs small, or use
-  the explicit-address path for large ones, and re-measure before relying on
-  either: `docs/reference/pyasc-device-evidence.md` has the counts and the scope.
+* A kernel whose only work is a copy must order its inbound copy against its
+  write-back by hand. Through one VECIN queue the generated code carried no
+  `set_flag`/`wait_flag` at all, and at a 64 KiB write-back the idiom alone was
+  wrong in 5 of 5 launches while the same kernel plus an
+  `asc.HardEvent.MTE2_MTE3` pair from `pipe.alloc_event_id(...)` was exact in 10
+  of 10; explicit addresses with the same pair were exact too. Kernels that keep
+  a vector operation between the copies, as the bundled examples do, were not
+  affected in these tests. Scope and counts:
+  `docs/reference/pyasc-device-evidence.md`.
 * The bundled reduction example accepts only shapes it addresses exactly: cols
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
   8-row blocks per core. It raises ValueError otherwise, because a column count
