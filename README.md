@@ -216,3 +216,31 @@ timing and the SOL formula). The roofline bound used here is a
 documented bandwidth estimate, not a SOLAR characterization.
 
 Released under the [MIT License](LICENSE).
+
+## pyasc backend
+
+AscendKernelBench can generate and evaluate two authoring languages. One run
+uses one backend; Ascend C remains the default.
+
+```bash
+python scripts/generate.py \
+  --task level1/19_ReLU \
+  --model <model> \
+  --backend pyasc \
+  --hardware ascend910b2 \
+  --run-name relu_pyasc
+
+python scripts/evaluate.py relu_pyasc
+python scripts/analyze.py relu_pyasc
+```
+
+A pyasc sample delivers `kernel.py` (an `@asc.jit` device kernel plus a host
+launcher) and `model_new.py`, exactly as an Ascend C sample delivers
+`custom_op.asc` and `model_new.py`. The run records its backend in
+`generation_config.yaml`, and `evaluate.py` reads it from there, so a run can
+never be evaluated as the wrong language.
+
+Install pyasc with the wheel that matches the host CANN pairing
+(`python -m pip install pyasc==1.1.1`); generation and offline analysis do not
+import it. See [docs/guide/pyasc-backend.md](docs/guide/pyasc-backend.md) for
+the contract, the JIT semantics, the static checks, and the timing caveats.

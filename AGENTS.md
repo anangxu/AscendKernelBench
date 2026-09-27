@@ -10,30 +10,34 @@ A stale `AGENTS.md` is a bug.
 ## What this project is
 
 AscendKernelBench is a *generate, then evaluate* benchmark for LLM-written
-Ascend C kernels on Huawei Ascend NPUs. A model reads a PyTorch reference
-`Model` from the vendored KernelBench corpus and must emit exactly two
-artifacts: `custom_op.asc` and `model_new.py`. The harness compiles the
-`.asc` into a **process-local** `libcustom_op.so`, loads it with
-`torch.ops.load_library` inside a worker PyTorch process, checks outputs
-against the reference, and times eligible kernels against live `torch_npu`
-eager execution. Scoring is KernelBench `fast_p` / `pass@k` plus an optional
+kernels on Huawei Ascend NPUs. A model reads a PyTorch reference `Model` from
+the vendored KernelBench corpus and must emit exactly two artifacts. The
+backend decides their names: Ascend C (the default) uses `custom_op.asc` and
+`model_new.py`; pyasc uses `kernel.py` and `model_new.py`. One run is one
+backend. The harness builds the sample through that backend's path, loads
+the operator inside a worker PyTorch process, checks outputs against the
+reference, and times eligible kernels against live `torch_npu` eager
+execution. Ascend C compiles `.asc` into a process-local `libcustom_op.so`
+loaded with `torch.ops.load_library`; pyasc imports `kernel.py` and JITs on
+the first call. Scoring is KernelBench `fast_p` / `pass@k` plus an optional
 roofline SOL score.
 
 ```text
 KernelBench task + hardware profile
   -> prompt.py -> llm.py -> runs/{run}/level{L}/{task}/sample_{i}/
-       (prompt.txt, custom_op.asc, model_new.py, response_raw.txt)
+       (prompt.txt, the backend's kernel file, model_new.py, response_raw.txt)
   -> eval.py static checks (checker.py / checks/)
   -> isolated worker (scripts/_eval_worker.py)
-  -> build.py + build_template/ -> libcustom_op.so -> torch.ops.load_library
+  -> Ascend C: build.py + build_template/ -> libcustom_op.so -> load_library
        (marked sources: split kernel/launcher/host units + shared host PCH)
+  -> pyasc:    pyasc_runtime.py -> kernel.py imported; the first call JITs
   -> eval_device.py: seeded correctness -> hidden value gate
        (d1..d4) -> NPU-event timing -> fresh-input re-check
   -> per-sample eval_result.json
   -> eval_results.json + pass_at_k_results.json -> score.py / scripts/analyze.py
 ```
 
-`custom_op.asc` has two sections separated by one
+For the Ascend C backend, `custom_op.asc` has two sections separated by one
 `// ==================== ASCEND_HOST_SECTION ====================` line:
 device kernels above (compiled without torch headers), torch glue below
 (compiled as plain C++ against the shared PCH). The host wrapper launches
@@ -62,7 +66,8 @@ python -m pip install -r requirements.txt
 # Workflow CLIs (run from the checkout root)
 export OPENAI_BASE_URL="https://provider.example/v1" OPENAI_API_KEY="..."
 python scripts/generate.py --task level1/19_ReLU --model <model> \
-    --hardware ascend910b2 --run-name relu_demo [--level N] [--n-samples N] \
+    --hardware ascend910b2 --run-name relu_demo [--backend ascendc|pyasc] \
+    [--level N] [--n-samples N] \
     [--prompt-mode zero_shot|one_shot|few_shot] [--temperature T] [--config PATH] \
     [--max-tokens N] [--reasoning-effort low|medium|high]
 # Fixed comparison set: 20 level1 tasks, every fifth task of the level.
@@ -99,7 +104,9 @@ CLI facts worth remembering:
 | --- | --- |
 | `KernelBench/level{1..4}/` | Vendored corpus: 270 tasks (100/100/50/20). Read-only in spirit. |
 | `src/` | Engine: dataset, prompt, LLM, checks, eval, build, timing, scoring, reporting. |
-| `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `python_source.py`/`text.py` (entry points and masking). |
+| `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `pyasc.py` (pyasc kernel, launcher, and call graph), `python_source.py`/`text.py` (entry points and masking). |
+| `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
+| `src/pyasc_runtime.py` | Worker-side pyasc runtime: sample-local JIT cache, real-file kernel import, platform and device selection, first-call timing. |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
@@ -149,7 +156,13 @@ root (`src/` sits directly under that root).
    offline analysis work on machines without a device.
 8. **English everywhere** in code, prompts, checker messages, comments, and docs.
 9. **Never reformat or edit vendored `KernelBench/` tasks** to satisfy lint.
-10. **CPU-reference fallback is not a free pass.** It only changes the
+10. **pyasc is a second backend, never a mixed one.** `kernel.py` is
+    imported from its real file (pyasc reads the source with introspection);
+    `PYASC_CACHE_DIR` is exported per sample before asc is imported; only
+    `kernel_fn[core_num](...)` compiles and launches, so a successful import
+    is never reported as a compiled sample. `first_call_seconds` is a compound
+    trace+compile+launch figure and must not be called a compile time.
+11. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
 
 ## Conventions

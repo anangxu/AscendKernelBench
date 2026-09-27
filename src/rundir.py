@@ -1,7 +1,8 @@
 """Run directory layout and result persistence (docs/guide/results.md).
 
 A run holds generation_config.yaml, one directory per sample with the two
-deliverables and eval_result.json, and an aggregate eval_results.json.
+deliverables and eval_result.json, and an aggregate eval_results.json. The
+sample file names depend on the backend recorded for the run.
 """
 
 from __future__ import annotations
@@ -13,9 +14,10 @@ from typing import Any
 
 import yaml
 
+from . import backend as backend_module
 from ._paths import RUNS_DIR
+from .backend import DEFAULT_BACKEND, Backend, parse_backend
 from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
-from .llm import AscendCGeneration
 
 
 def create_run(run_name: str, generation_config: dict) -> Path:
@@ -71,12 +73,28 @@ def generation_hardware_name(run_dir: Path) -> str | None:
     return None
 
 
+def generation_backend(run_dir: Path) -> Backend | None:
+    """Return the backend recorded for a run, or None when it is absent.
+
+    Runs older than the backend field carry no value; callers fall back to
+    the default backend in that case.
+
+    Raises:
+        ValueError: If the recorded value is not a known backend.
+    """
+    value = _read_generation_config(run_dir).get("backend")
+    if value is None or not str(value).strip():
+        return None
+    return parse_backend(value)
+
+
 _HARNESS_KEYS = (
     "model",
     "prompt_mode",
     "temperature",
     "reasoning_effort",
     "max_tokens",
+    "backend",
 )
 
 
@@ -95,41 +113,156 @@ def sample_dir(run_dir: Path, task_id: str, sample_id: int) -> Path:
     return Path(run_dir) / task_id / f"sample_{sample_id}"
 
 
+def _backend_name(value: Backend | str) -> str:
+    """Return the name parse_backend expects for a Backend or its value."""
+    return value.value if isinstance(value, Backend) else value
+
+
 def save_sample(
     run_dir: Path,
     task_id: str,
     sample_id: int,
     *,
     prompt: str,
-    generation: AscendCGeneration,
+    generation: object,
     raw_response: str = "",
+    backend: Backend | str = DEFAULT_BACKEND,
 ) -> Path:
-    """Persist one generated sample (prompt, both deliverables, raw text)."""
+    """Persist one generated sample (prompt, both deliverables, raw text).
+
+    Args:
+        generation: An AscendCGeneration for the Ascend C backend, or a
+            PyAscGeneration for pyasc.
+        backend: Authoring language that fixes the kernel artifact name.
+
+    Raises:
+        TypeError: If generation does not match the backend.
+    """
+    resolved = parse_backend(_backend_name(backend))
+    kernel_source = _kernel_source(generation, resolved)
+    kernel_file, wrapper_file = backend_module.sample_files(resolved)
     out_dir = sample_dir(run_dir, task_id, sample_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    (out_dir / "custom_op.asc").write_text(generation.custom_op_asc, encoding="utf-8")
-    (out_dir / "model_new.py").write_text(generation.model_new_py, encoding="utf-8")
+    (out_dir / kernel_file).write_text(kernel_source, encoding="utf-8")
+    (out_dir / wrapper_file).write_text(generation.model_new_py, encoding="utf-8")
     if raw_response:
         (out_dir / "response_raw.txt").write_text(raw_response, encoding="utf-8")
     return out_dir
 
 
+def _kernel_source(generation: object, backend: Backend) -> str:
+    """Return the kernel field of generation that matches the backend.
+
+    Raises:
+        TypeError: If generation is not the model of this backend.
+    """
+    if backend is Backend.PYASC:
+        kernel_py = getattr(generation, "kernel_py", None)
+        if not isinstance(kernel_py, str):
+            raise TypeError("pyasc samples need a PyAscGeneration")
+        return kernel_py
+    custom_op_asc = getattr(generation, "custom_op_asc", None)
+    if not isinstance(custom_op_asc, str):
+        raise TypeError("ascendc samples need an AscendCGeneration")
+    return custom_op_asc
+
+
+def load_sample(
+    sample_dir_path: Path, backend: Backend | str = DEFAULT_BACKEND
+) -> tuple[str, str]:
+    """Return the (kernel source, wrapper source) of one sample.
+
+    Args:
+        sample_dir_path: One sample directory.
+        backend: Authoring language that fixes the kernel artifact name.
+
+    Raises:
+        FileNotFoundError: If either deliverable is missing.
+    """
+    kernel_file, wrapper_file = backend_module.sample_files(
+        parse_backend(_backend_name(backend))
+    )
+    root = Path(sample_dir_path)
+    return (
+        (root / kernel_file).read_text(encoding="utf-8"),
+        (root / wrapper_file).read_text(encoding="utf-8"),
+    )
+
+
+def sample_complete(
+    sample_dir_path: Path, backend: Backend | str = DEFAULT_BACKEND
+) -> bool:
+    """Return True when a sample directory holds both deliverables."""
+    kernel_file, wrapper_file = backend_module.sample_files(
+        parse_backend(_backend_name(backend))
+    )
+    root = Path(sample_dir_path)
+    return (root / kernel_file).is_file() and (root / wrapper_file).is_file()
+
+
 def iter_sample_dirs(
-    run_dir: Path, level: int | None = None
+    run_dir: Path,
+    level: int | None = None,
+    backend: Backend | str | None = None,
 ) -> Iterator[tuple[str, int, Path]]:
     """Yield (task_id, sample_id, dir) for every complete sample.
 
-    A sample is complete when both custom_op.asc and model_new.py exist.
+    A sample is complete when both of its backend's deliverables exist.
+    With backend unset the run's recorded backend is used, so an old run
+    without a backend field stays an Ascend C run. When the recorded
+    backend yields no sample at all, the other backends are tried, so a
+    directory copied out of a run still discovers its samples.
     """
     pattern = f"level{level}/*" if level is not None else "level*/*"
-    for task_dir in sorted(Path(run_dir).glob(pattern)):
-        if not task_dir.is_dir():
-            continue
-        task_id = f"{task_dir.parent.name}/{task_dir.name}"
-        for sdir in sorted(task_dir.glob("sample_*")):
-            if (sdir / "custom_op.asc").is_file() and (sdir / "model_new.py").is_file():
-                yield task_id, int(sdir.name.split("_", 1)[1]), sdir
+    task_dirs = [
+        task_dir
+        for task_dir in sorted(Path(run_dir).glob(pattern))
+        if task_dir.is_dir()
+    ]
+    resolved = (
+        parse_backend(_backend_name(backend))
+        if backend is not None
+        else generation_backend(run_dir)
+    )
+    candidates = _discovery_order(resolved, task_dirs)
+    for index, candidate in enumerate(candidates):
+        kernel_file, wrapper_file = backend_module.sample_files(candidate)
+        found: list[tuple[str, int, Path]] = []
+        for task_dir in task_dirs:
+            task_id = f"{task_dir.parent.name}/{task_dir.name}"
+            for sdir in sorted(task_dir.glob("sample_*")):
+                if (sdir / kernel_file).is_file() and (sdir / wrapper_file).is_file():
+                    found.append((task_id, int(sdir.name.split("_", 1)[1]), sdir))
+        if found or index == len(candidates) - 1:
+            yield from found
+            return
+
+
+def _discovery_order(resolved: Backend | None, task_dirs: list[Path]) -> list[Backend]:
+    """Return the backends to try, most likely first, without duplicates."""
+    first = resolved if resolved is not None else DEFAULT_BACKEND
+    order = [first]
+    for candidate in Backend:
+        if candidate not in order:
+            order.append(candidate)
+    if resolved is None and not _any_sample(task_dirs, first):
+        # No backend was recorded: prefer whichever backend the samples use.
+        for candidate in order[1:]:
+            if _any_sample(task_dirs, candidate):
+                order.remove(candidate)
+                order.insert(0, candidate)
+                break
+    return order
+
+
+def _any_sample(task_dirs: list[Path], candidate: Backend) -> bool:
+    """Return True when any sample dir is complete for one backend."""
+    return any(
+        sample_complete(sdir, candidate)
+        for task_dir in task_dirs
+        for sdir in task_dir.glob("sample_*")
+    )
 
 
 def load_eval_result(sample_dir_path: Path) -> dict[str, Any] | None:

@@ -9,7 +9,7 @@ KernelBench task + hardware profile
                   |
          llm.py -> LLM endpoint
                   |
-     custom_op.asc + model_new.py
+     backend kernel artifact + model_new.py
                   |
              runs/{name}/
                   |
@@ -97,7 +97,7 @@ NPU imports live inside worker/timing functions so source inspection and host-si
 
 Build configuration is controlled by the repository template. The generated `.asc` file supplies kernel logic, host launch wrappers, and a `TORCH_LIBRARY` / `TORCH_LIBRARY_IMPL` binding. The template builds a **process-local** `libcustom_op.so` with RPATH to Torch, `torch_npu`, and CANN libraries. It does not run `cmake --install`, does not produce a `custom_opp_*.run` package, and does not write into site-packages or `$ASCEND_OPP_PATH/vendors`. The worker loads that `.so` with `torch.ops.load_library` so `torch.ops.custom_op` is available. Hardware profile architecture selection is an input to compilation, not runtime hardware verification.
 
-Build and evaluation always compile `custom_op.asc` with the CMake template and load `libcustom_op.so`. Sources carrying the `ASCEND_HOST_SECTION` marker build in split mode: `build.py` separates the device and host sections, generates the `extern "C"` launch-stub TU from the kernel signatures, and compiles the host glue as plain C++ with a shared precompiled header cached per environment. Unmarked sources build as a single ASC translation unit. Both modes produce the same process-local library contract; there is no pybind11 path.
+For Ascend C, build and evaluation compile `custom_op.asc` with the CMake template and load `libcustom_op.so`; for pyasc they import `kernel.py` and let pyasc trace and compile on the first call. Sources carrying the `ASCEND_HOST_SECTION` marker build in split mode: `build.py` separates the device and host sections, generates the `extern "C"` launch-stub TU from the kernel signatures, and compiles the host glue as plain C++ with a shared precompiled header cached per environment. Unmarked sources build as a single ASC translation unit. Both modes produce the same process-local library contract; there is no pybind11 path.
 
 The [evaluation guide](../guide/evaluation.md) documents seeded initialization, tolerance rules, CPU-reference fallback, timeout accounting, and event timing. The [task authoring guide](../task_authoring.md) describes both reference and candidate contracts.
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from . import rundir
+from .backend import DEFAULT_BACKEND, Backend, parse_backend
 from .config import (
     EvalConfig,
     HardwareProfile,
@@ -35,11 +36,31 @@ __all__ = [
     "load_eval_runtime",
     "print_eval_report",
     "read_task_ids",
+    "resolve_backend",
     "resolve_generation_settings",
     "resolve_run_dir",
     "sample_status_label",
     "select_tasks",
 ]
+
+
+def resolve_backend(
+    cli_value: str | None = None, config_value: object = None
+) -> Backend:
+    """Resolve the authoring backend from a CLI flag, then the config.
+
+    Args:
+        cli_value: The --backend value, when the flag was given.
+        config_value: The generation.backend value from the loaded config.
+
+    Returns:
+        The resolved backend; absent values resolve to the default backend.
+
+    Raises:
+        ValueError: If the resolved value is not a known backend.
+    """
+    value = cli_value if cli_value is not None else config_value
+    return parse_backend(value.value if isinstance(value, Backend) else value)
 
 
 class GenerationSettings(BaseModel):
@@ -53,6 +74,7 @@ class GenerationSettings(BaseModel):
     max_tokens: int
     num_samples: int
     reasoning_effort: str | None = None
+    backend: Backend = DEFAULT_BACKEND
 
 
 def resolve_generation_settings(
@@ -64,6 +86,7 @@ def resolve_generation_settings(
     num_samples: int | None = None,
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
+    backend: str | None = None,
 ) -> GenerationSettings:
     """Resolve generation settings from YAML with optional CLI overrides."""
     gen_cfg = dict(config.generation)
@@ -85,6 +108,7 @@ def resolve_generation_settings(
             else int(num_samples)
         ),
         reasoning_effort=effort or None,
+        backend=resolve_backend(backend, gen_cfg.get("backend")),
     )
 
 
@@ -178,6 +202,7 @@ def generation_run_config(
         "prompt_mode": settings.prompt_mode,
         "num_samples": settings.num_samples,
         "reasoning_effort": settings.reasoning_effort,
+        "backend": settings.backend.value,
         "hardware": hardware_name,
         "tasks": list(task_ids),
     }

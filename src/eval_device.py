@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from .backend import Backend, kernel_file, parse_backend
 from .build import (
     BuildError,
     LoadError,
@@ -32,6 +33,18 @@ from .compare import (
     tensor_nbytes,
 )
 from .eval_result import compiled_result, eval_protocol_metadata, fail_result
+from .pyasc_runtime import (
+    PyAscError,
+    PyAscJITError,
+    PyAscLoadError,
+    PyAscUnavailableError,
+    configure_platform,
+    import_asc,
+    load_kernel_module,
+    prepare_cache_dir,
+    runtime_facts,
+    time_first_call,
+)
 from .runtime import (
     npu_device_index,
     npu_runtime_metadata,
@@ -46,6 +59,21 @@ from .timing import (
 )
 
 __all__ = ["DeviceEvalRequest", "eval_sample_on_device", "exec_python_source"]
+
+###########################################################################
+# PYASC TIMING VALIDATION
+###########################################################################
+# pyasc launches on its own runtime stream, so an NPU event pair recorded on
+# torch's stream could in principle measure almost nothing. Five unmeasured
+# calls give a wall-clock figure to compare against the event-measured mean.
+# On the validated host the healthy ratio is 0.30 to 0.35 in harness: the
+# event captures the device execution while wall clock also pays pyasc's
+# per-call host overhead (kernel re-registration and a synchronize), which is
+# not on the device timeline. A stream that is genuinely not covered yields
+# roughly zero, so the gate sits well below the healthy band.
+PYASC_TIMING_WALL_TRIALS = 5
+PYASC_MIN_EVENT_WALL_RATIO = 0.05
+###########################################################################
 
 
 class DeviceEvalRequest(BaseModel):
@@ -70,6 +98,8 @@ class DeviceEvalRequest(BaseModel):
     memory_bandwidth_gbps: float = 0.0
     peak_tflops: float = 0.0
     l2_clear_size: int = 256 * 1024 * 1024
+    backend: str = "ascendc"
+    soc_version: str = ""
 
 
 def exec_python_source(
@@ -105,6 +135,8 @@ class SampleEvaluator:
     def __init__(self, request: DeviceEvalRequest) -> None:
         """Bind the request; runtime objects are filled during run."""
         self.req = request
+        self.backend = parse_backend(request.backend)
+        self.kernel_module: Any = None
         self.sample_path = Path(request.sample_dir)
         self.so_path: Path | None = None
         self.torch: Any = None
@@ -150,6 +182,9 @@ class SampleEvaluator:
         failed = self._construct_models()
         if failed is not None:
             return self._with_build_facts(failed)
+        failed = self._warm_up_pyasc()
+        if failed is not None:
+            return self._with_build_facts(failed)
         failed = self._run_correctness_trials()
         if failed is not None:
             return self._with_build_facts(failed)
@@ -162,6 +197,7 @@ class SampleEvaluator:
             return hidden_failure
         if self.req.measure_performance:
             self._time_both_models()
+            self._validate_pyasc_timing()
             if self._post_timing_recheck() is not None:
                 return self._compiled(correctness=False)
         return self._compiled(correctness=True)
@@ -187,7 +223,9 @@ class SampleEvaluator:
         )
 
     def _build_and_load(self) -> dict[str, Any] | None:
-        """Compile and load libcustom_op.so; fail-payload on error."""
+        """Compile and load the backend's kernel; fail-payload on error."""
+        if self.backend is Backend.PYASC:
+            return self._load_pyasc()
         asc_source = (self.sample_path / "custom_op.asc").read_text(encoding="utf-8")
         self.metadata["build_mode"] = (
             "split" if split_asc_source(asc_source) is not None else "legacy"
@@ -211,6 +249,79 @@ class SampleEvaluator:
         finally:
             self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
         return None
+
+    def _load_pyasc(self) -> dict[str, Any] | None:
+        """Import asc, isolate the JIT cache, and load kernel.py.
+
+        Importing the module does not compile it: pyasc traces, compiles, and
+        launches on the first subscripted call, so a successful import must
+        never be reported as a successful compile. The JIT cache directory is
+        exported before asc is imported because pyasc reads it at import time.
+        """
+        backend = self.backend.value
+        kernel_path = self.sample_path / kernel_file(Backend.PYASC)
+        if not kernel_path.is_file():
+            return fail_result(
+                compilation_error="sample dir missing kernel.py",
+                failure_stage="module_load",
+                backend=backend,
+            )
+        started = time.monotonic()
+        self.metadata["build_mode"] = "pyasc"
+        try:
+            prepare_cache_dir(self.sample_path)
+            asc = import_asc()
+            self.metadata["pyasc_soc_version"] = configure_platform(
+                asc, npu_device_index(self.req.device)
+            )
+            self.kernel_module = load_kernel_module(self.sample_path, kernel_path)
+        except (PyAscUnavailableError, PyAscLoadError, PyAscError) as exc:
+            return fail_result(
+                compilation_error=str(exc),
+                failure_stage="module_load",
+                backend=backend,
+            )
+        finally:
+            self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
+        return None
+
+    def _warm_up_pyasc(self) -> dict[str, Any] | None:
+        """Run the first pyasc call: trace, compile, and launch.
+
+        Only this call decides whether the sample compiled. Its cost is a
+        compound figure and is reported as first_call_seconds, never as a pure
+        compile time. The models are rebuilt afterwards so the preparation
+        call leaves no RNG or parameter state in the seeded protocol.
+        """
+        if self.backend is not Backend.PYASC:
+            return None
+        backend = self.backend.value
+        seed_torch(self.req.seed)
+        try:
+            raw_inputs = self.get_inputs()
+            inputs = [self._process_input(item) for item in raw_inputs]
+            seconds, _ = time_first_call(lambda: self.new_model(*inputs))
+            self.torch.npu.synchronize()
+        except PyAscJITError as exc:
+            return fail_result(
+                compilation_error=str(exc),
+                jit_error=str(exc),
+                failure_stage="jit",
+                backend=backend,
+            )
+        except Exception as exc:
+            return fail_result(
+                compilation_error=f"pyasc first call failed: {exc!r}",
+                failure_stage="execution",
+                backend=backend,
+            )
+        self.metadata["first_call_seconds"] = round(seconds, 3)
+        self.metadata.update(runtime_facts(self.sample_path))
+        # Rebuild so the warm-up call cannot influence measured behaviour.
+        self.new_model = None
+        self.ref_model = None
+        self.ref_model_cpu = None
+        return self._construct_models()
 
     def _load_python_modules(self) -> dict[str, Any] | None:
         """Exec the task and model_new.py; fail-payload on error."""
@@ -442,12 +553,67 @@ class SampleEvaluator:
             "max_difference": self.max_diff,
             "correctness_passed": self.pass_count,
             "shared_library": str(self.so_path),
+            "backend": self.backend.value,
             **npu_runtime_metadata(self.req.device),
         }
         if self.ref_npu_error:
             self.metadata["reference_npu_error"] = self.ref_npu_error
+        if self.backend is Backend.PYASC:
+            # Timing validity is decided by _validate_pyasc_timing, which
+            # compares the event-measured mean against wall-clock time.
+            self.metadata.setdefault("stream_mode", "pyasc_current_stream")
 
     ################################# TIMING #################################
+    def _validate_pyasc_timing(self) -> None:
+        """Check that NPU events really cover the candidate's execution.
+
+        Compares the event-measured mean against a wall-clock measurement of
+        the same calls. When the events do not cover the kernel the candidate
+        is left with no speedup rather than a number that cannot be trusted.
+        """
+        if self.backend is not Backend.PYASC or self.runtime is None:
+            return
+        inputs = [self._process_input(item) for item in self.get_inputs()]
+        try:
+            with self.torch.no_grad():
+                for _ in range(2):
+                    self.new_model(*inputs)
+                self.torch.npu.synchronize()
+                started = time.perf_counter()
+                for _ in range(PYASC_TIMING_WALL_TRIALS):
+                    self.new_model(*inputs)
+                self.torch.npu.synchronize()
+                wall_ms = (
+                    (time.perf_counter() - started)
+                    * 1000.0
+                    / PYASC_TIMING_WALL_TRIALS
+                )
+        except Exception as exc:
+            self.metadata["timing_valid"] = False
+            self.metadata["timing_invalid_reason"] = (
+                f"wall-clock cross-check failed: {exc!r}"
+            )
+            return
+        ratio = self.runtime / wall_ms if wall_ms > 0 else 0.0
+        self.metadata["timing_event_ms"] = float(f"{self.runtime:.6g}")
+        self.metadata["timing_wall_ms"] = float(f"{wall_ms:.6g}")
+        self.metadata["timing_event_wall_ratio"] = float(f"{ratio:.4g}")
+        if ratio < PYASC_MIN_EVENT_WALL_RATIO:
+            self.metadata["timing_valid"] = False
+            self.metadata["timing_invalid_reason"] = (
+                f"event time {self.runtime:.6g}ms is far below wall time "
+                f"{wall_ms:.6g}ms (ratio {ratio:.3f}); the timed stream does "
+                "not cover the kernel, so no speedup is reported"
+            )
+            self.runtime = None
+            self.runtime_stats = None
+            self.ref_runtime = None
+            self.ref_runtime_stats = None
+            self.metadata.pop("speedup", None)
+            self.metadata["excessive_speedup"] = False
+            return
+        self.metadata["timing_valid"] = True
+
     def _time_both_models(self) -> None:
         """Time candidate and NPU reference; attach speedup and SOL metadata."""
 
