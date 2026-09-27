@@ -100,6 +100,13 @@ These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
   exact one, so do not synchronise a copy against the vector pipe. The TQue
   style handles this internally and is the recommended idiom for generated
   kernels.
+* The bundled reduction example accepts only shapes it addresses exactly: cols
+  must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
+  8-row blocks per core. It raises ValueError otherwise, because a column count
+  that is not a whole block rounds `src_rep_stride` down and silently reduces
+  the wrong elements (measured: cols=12 gives max_abs_diff 4.41 against
+  torch.sum). Every accepted shape was checked against `torch.sum(dim=-1)` and
+  matched exactly.
 
 ## Evaluation semantics
 
@@ -172,9 +179,13 @@ coverage:
   floating tensor to the configured precision, and reports
   `failure_stage=unsupported_dtype` with `limitation_scope=backend` and the
   offending `unsupported_dtypes`. Unsupported inputs are rejected **before**
-  any cast: converting them would score a different task than the reference
-  model defines. Supported floating types are still cast to the configured
-  precision, exactly as before, so this is not a blanket "no conversion" rule.
+  any cast: the raw inputs are inspected first and nothing is converted while
+  that verdict is unresolved, so converting them cannot mask the gap or push a
+  refusal into `failure_stage=execution`. Converting them would also score a
+  different task than the reference model defines. A backstop re-checks the
+  tensors the kernel is actually handed. Supported floating types are still
+  cast to the configured precision, exactly as before, so this is not a
+  blanket "no conversion" rule.
 * **Code generation.** `UnsupportedSyntaxError` means the traced body used
   something this codegen rejects. That is attributable to the generated
   source, and it may equally be a DSL syntax mistake in that source, so it is

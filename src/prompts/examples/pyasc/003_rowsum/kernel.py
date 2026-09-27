@@ -6,8 +6,9 @@ docstring:
   - in the contiguous mask mode mask is an element count, not a bit mask;
   - src_rep_stride counts 32-byte data blocks of the source while
     dst_rep_stride counts destination elements;
-  - a data_copy write-back shorter than 32 bytes silently writes nothing, so
-    each core must own at least 8 fp32 rows.
+  - a data_copy write-back shorter than 32 bytes silently writes nothing, so a
+    core's write-back must cover whole 32-byte blocks, which is why the
+    launcher only accepts cols and rows_per_core that are multiples of 8 fp32.
 
 The TQue style is used on purpose: it reserves UB and emits the pipe
 synchronisation itself, which a bare LocalTensor address does not.
@@ -19,8 +20,10 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-MAX_COLS = 64          # contiguous mask limit for fp32
-MIN_ROWS_PER_CORE = 8  # 32 bytes of fp32 write-back
+MAX_COLS = 64                       # contiguous mask limit for fp32
+BYTE_ALIGN = 32
+BLOCK_ELEMS = BYTE_ALIGN // 4       # fp32 elements in one 32-byte block
+MIN_ROWS_PER_CORE = BLOCK_ELEMS     # a write-back is a whole number of blocks
 DEFAULT_CORES = 8
 
 
@@ -68,21 +71,31 @@ def rowsum_kernel(
 
 
 def pick_cores(rows: int) -> int:
-    """Return the largest core count that divides rows into usable blocks."""
+    """Return the largest core count that splits rows into whole blocks."""
     cores = DEFAULT_CORES
-    while cores > 1 and (rows % cores != 0 or rows // cores < MIN_ROWS_PER_CORE):
+    while cores > 1 and (
+        rows % cores != 0 or (rows // cores) % MIN_ROWS_PER_CORE != 0
+    ):
         cores //= 2
     return cores
 
 
 def rowsum_launch(x: torch.Tensor) -> torch.Tensor:
-    """Reduce the last axis of a contiguous fp32 tensor with shape (rows, cols)."""
+    """Reduce the last axis of a contiguous fp32 tensor shaped (rows, cols).
+
+    Only shapes the kernel addresses exactly are accepted. cols must be whole
+    32-byte blocks (a multiple of 8 fp32, within the 64-element contiguous
+    mask), because src_rep_stride is derived from it in blocks and every row
+    has to start on a block boundary. rows_per_core is also the write-back
+    length, so each core must own a whole number of 32-byte row blocks.
+    Anything else is rejected rather than computed with a rounded stride.
+    """
     rows, cols = int(x.shape[0]), int(x.shape[1])
-    if cols > MAX_COLS:
-        raise ValueError("cols above the fp32 contiguous mask limit are unsupported")
+    if cols < BLOCK_ELEMS or cols > MAX_COLS or cols % BLOCK_ELEMS != 0:
+        raise ValueError("cols must be 8..64 fp32 in whole 32-byte blocks")
     cores = pick_cores(rows)
-    if rows % cores != 0 or rows // cores < MIN_ROWS_PER_CORE:
-        raise ValueError("rows cannot be split into cores with a 32-byte write-back")
+    if rows % cores != 0 or (rows // cores) % MIN_ROWS_PER_CORE != 0:
+        raise ValueError("rows must split into whole 32-byte row blocks per core")
     y = torch.empty(rows, dtype=x.dtype, device=x.device)
     rowsum_kernel[cores, rt.current_stream()](x, y, rows // cores, cols)
     rt.synchronize()
