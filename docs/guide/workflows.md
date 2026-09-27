@@ -38,7 +38,7 @@ Keep the manifest stable. Changing it breaks comparability with earlier runs.
 
 The command processes tasks and samples sequentially. Sample IDs start at zero for each task. There is no CLI option for parallel generation or automatic resume.
 
-Generation requests structured output first and falls back to fenced code blocks if that request fails. The client checks for basic source markers and can retry an invalid generation once. These retries address response generation or formatting; they do not use compiler or correctness feedback to repair the operator.
+Generation requests structured output first and falls back to a plain completion if that request fails; the fallback decodes a bare JSON object first and otherwise extracts fenced code blocks. The client checks for basic source markers and can retry an invalid generation once. These retries address response generation or formatting; they do not use compiler or correctness feedback to repair the operator.
 
 `one_shot` includes the first bundled example; `few_shot` includes every bundled example. The current checkout ships an elementwise-add example and a LeakyReLU example. `zero_shot` omits examples.
 

@@ -174,7 +174,7 @@ def extract_kernel_signatures(device_source: str) -> list[KernelSignature]:
         BuildError: If no kernel is present or a parameter list uses
             constructs the stub generator does not support.
     """
-    code = strip_cpp_comments(device_source)
+    code = strip_cpp_comments(device_source, mask_literals=True)
     sigs: dict[str, KernelSignature] = {}
     for match in _KERNEL_DEF_RE.finditer(code):
         sig = _parse_kernel_params(match.group(1), match.group(2))
@@ -499,7 +499,7 @@ def build_custom_op(
     try:
         _build_via_cmake(work_dir, cmake_arch, timeout_s, split=True, pch=pch)
     except BuildError as first_error:
-        if pch is None:
+        if pch is None or not _looks_like_pch_failure(first_error):
             raise
         logger.warning("split build with PCH failed; retrying without PCH")
         try:
@@ -511,6 +511,12 @@ def build_custom_op(
         with contextlib.suppress(OSError):
             pch.unlink()
     return find_built_library(work_dir)
+
+
+def _looks_like_pch_failure(error: BuildError) -> bool:
+    """Return True when the compiler log points at the precompiled header."""
+    text = str(error).lower()
+    return "pch" in text or "precompiled" in text
 
 
 def _build_via_cmake(
@@ -589,9 +595,12 @@ def _configure_defines(
         "AKB_SPLIT_BUILD": "ON" if split else "OFF",
     }
     discovery = _torch_discovery()
-    if discovery is not None:
-        defines["TORCH_CMAKE_PREFIX_PATH"] = discovery[0]
-        defines["TORCH_NPU_PATH"] = discovery[1]
+    if discovery is None:
+        raise BuildError(
+            "torch and torch_npu must be importable to configure the build"
+        )
+    defines["TORCH_CMAKE_PREFIX_PATH"] = discovery[0]
+    defines["TORCH_NPU_PATH"] = discovery[1]
     if split:
         defines["AKB_PCH_PATH"] = str(pch) if pch is not None else ""
         facts = _torch_facts()
@@ -631,14 +640,11 @@ def _write_if_changed(path: Path, content: str) -> None:
 
 
 def find_built_library(work_dir: Path) -> Path:
-    """Return libcustom_op.so from work_dir or work_dir/build."""
+    """Return libcustom_op.so from work_dir."""
     work_dir = Path(work_dir)
-    for candidate in (
-        work_dir / SHARED_LIBRARY_NAME,
-        work_dir / "build" / SHARED_LIBRARY_NAME,
-    ):
-        if candidate.is_file():
-            return candidate
+    candidate = work_dir / SHARED_LIBRARY_NAME
+    if candidate.is_file():
+        return candidate
     raise BuildError(
         f"Built shared library not found in {work_dir} (expected {SHARED_LIBRARY_NAME})"
     )

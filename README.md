@@ -49,7 +49,7 @@ for Ascend C, not a CUDA-to-NPU score translator.
 
 - **270 vendored KernelBench tasks** in four levels: 100 operators, 100
   fused operators, 50 networks or subgraphs, and 20 model tasks.
-- **Process-local operators.** ACLNN mode compiles `custom_op.asc` into
+- **Process-local operators.** The CMake build compiles `custom_op.asc` into
   `libcustom_op.so` next to the sample. The evaluator loads it inside the
   worker PyTorch process. Nothing is installed into site-packages or the
   global CANN OPP path, so parallel jobs do not lock a shared environment.
@@ -191,7 +191,7 @@ and must be validated before use.
 ```text
 KernelBench/                 Vendored reference tasks, level1–level4
 src/                         Generation, build, evaluation, and scoring
-scripts/                     Five benchmark CLIs
+scripts/                     Four user CLIs plus two internal worker scripts
 configs/                     Eval defaults, hardware profiles, task subsets
 build_template/              CMake project that writes libcustom_op.so
 docs/                        English Markdown guides and references

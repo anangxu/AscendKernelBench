@@ -11,9 +11,10 @@ from typing import Any
 
 import numpy as np
 
+from .compare import tensor_nbytes
+from .runtime import seed_torch
+
 DEFAULT_L2_CLEAR_BYTES = 256 * 1024 * 1024
-DEFAULT_NUM_WARMUP = 10
-DEFAULT_NUM_TRIALS = 100
 # Input sets larger than this reuse one allocation during timing (KernelBench
 # L1 already ships multi-gigabyte cases). Smaller sets are redrawn per trial.
 REFRESH_INPUT_BYTES_LIMIT = 256 * 1024 * 1024
@@ -50,15 +51,67 @@ def clear_l2_cache(
     del dummy
 
 
+class AdaptiveInputTimer:
+    """Seed, draw inputs, and time calls under the refresh policy.
+
+    The first draw decides whether each trial gets fresh inputs. The same
+    instance must time the candidate and reference so both start from the
+    same seed and keep the previous allocation alive.
+    """
+
+    def __init__(
+        self,
+        draw_inputs: Callable[[], Sequence[Any]],
+        *,
+        seed: int,
+        num_warmup: int,
+        num_trials: int,
+        device: Any,
+        l2_clear_size: int,
+    ) -> None:
+        """Draw the probe input set and record the refresh decision."""
+        self._draw_inputs = draw_inputs
+        self._seed = seed
+        self._num_warmup = num_warmup
+        self._num_trials = num_trials
+        self._device = device
+        self._l2_clear_size = l2_clear_size
+        seed_torch(seed)
+        probe = list(draw_inputs())
+        self.input_bytes = tensor_nbytes(probe)
+        self.fresh_per_trial = self.input_bytes <= REFRESH_INPUT_BYTES_LIMIT
+        self._perf_box: list[Sequence[Any]] = [probe]
+        self._prev_box: list[Sequence[Any] | None] = [None]
+
+    def _refresh(self) -> None:
+        """Replace the live input set and keep the previous allocation."""
+        self._prev_box[0] = self._perf_box[0]
+        self._perf_box[0] = list(self._draw_inputs())
+
+    def time(self, kernel_fn: Callable[..., Any]) -> list[float]:
+        """Time kernel_fn(*inputs) with the configured warmup and trials."""
+        seed_torch(self._seed)
+        return time_execution_with_npu_event(
+            lambda: kernel_fn(*self._perf_box[0]),
+            [],
+            num_warmup=self._num_warmup,
+            num_trials=self._num_trials,
+            device=self._device,
+            setup=self._refresh if self.fresh_per_trial else None,
+            l2_clear_size=self._l2_clear_size,
+        )
+
+
 def time_execution_with_npu_event(
     kernel_fn: Callable[..., Any],
     args: Sequence[Any],
-    num_warmup: int = DEFAULT_NUM_WARMUP,
-    num_trials: int = DEFAULT_NUM_TRIALS,
-    discard_first: int = 1,
-    device: Any = None,
+    *,
+    num_warmup: int,
+    num_trials: int,
+    device: Any,
+    l2_clear_size: int,
     setup: Callable[[], None] | None = None,
-    l2_clear_size: int = DEFAULT_L2_CLEAR_BYTES,
+    discard_first: int = 1,
 ) -> list[float]:
     """Time kernel_fn(*args) with torch.npu.Event, in milliseconds.
 
@@ -68,8 +121,6 @@ def time_execution_with_npu_event(
     """
     import torch
 
-    if device is None:
-        device = torch.npu.current_device()
     previous_device = torch.npu.current_device()
     torch.npu.set_device(device)
     try:

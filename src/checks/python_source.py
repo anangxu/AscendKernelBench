@@ -25,9 +25,7 @@ NPU_NATIVE_PATTERNS = (
 )
 
 STREAM_PATTERNS = (
-    r"torch\.cuda\.Stream\s*\(",
     r"cuda\.Stream\s*\(",
-    r"torch\.npu\.Stream\s*\(",
     r"npu\.Stream\s*\(",
     r"with\s+torch\.(cuda|npu)\.stream",
     r"\.wait_stream\s*\(",

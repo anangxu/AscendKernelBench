@@ -17,7 +17,7 @@ KernelBench task + hardware profile
                   |
           one worker per sample
                   |
-        ACLNN CMake project -> libcustom_op.so (process-local load)
+        CMake build -> libcustom_op.so (process-local load)
                   |
         correctness -> NPU-event timing
                   |
@@ -85,7 +85,7 @@ Evaluation is sequential at the batch-script level, with a new worker for each s
 
 Prompt construction reads task source without executing it. Prompts contain the complete reference file, target hardware information, the selected examples, and a fixed two-file output contract. `zero_shot` omits examples, `one_shot` uses the first example, and `few_shot` uses every available example. The current repository ships two examples (elementwise add, then LeakyReLU). `one_shot` uses the first; `few_shot` uses both.
 
-The LLM client first attempts a structured response with the `custom_op_asc` and `model_new_py` fields. If that request or parsing fails, it attempts a normal completion and extracts two fenced code blocks. The resulting fields pass through the same Pydantic model and marker checks. Generation can retry once after an invalid/failed attempt. Endpoint fallback and retries can therefore issue more than one request for a sample.
+The LLM client first attempts a structured response with the `custom_op_asc` and `model_new_py` fields. If that request or parsing fails, it attempts a normal completion, decodes a bare JSON object first, and otherwise extracts two fenced code blocks. The resulting fields pass through the same Pydantic model and marker checks. Generation can retry once after an invalid/failed attempt. Endpoint fallback and retries can therefore issue more than one request for a sample.
 
 These checks establish that response fields resemble the expected files; they do not establish compilability or correctness. Full static checking happens at evaluation. Raw responses, when available, are persisted next to the generated files.
 

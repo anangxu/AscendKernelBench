@@ -40,9 +40,8 @@ from .runtime import (
 )
 from .sol import attach_sol_metadata, task_declared_flops
 from .timing import (
-    REFRESH_INPUT_BYTES_LIMIT,
+    AdaptiveInputTimer,
     get_timing_stats,
-    time_execution_with_npu_event,
 )
 
 __all__ = ["DeviceEvalRequest", "eval_sample_on_device", "exec_python_source"]
@@ -58,7 +57,6 @@ class DeviceEvalRequest(BaseModel):
     cmake_arch: str
     hardware_name: str
     device: str
-    measure_performance: bool
     seed: int
     num_correct_trials: int
     num_perf_trials: int
@@ -142,7 +140,7 @@ class SampleEvaluator:
         self.torch = torch
         failed = self._build_and_load()
         if failed is not None:
-            return failed
+            return self._with_build_facts(failed)
         failed = self._load_python_modules()
         if failed is not None:
             return self._with_build_facts(failed)
@@ -160,10 +158,9 @@ class SampleEvaluator:
         hidden_failure = self._run_hidden_distributions()
         if hidden_failure is not None:
             return hidden_failure
-        if self.req.measure_performance:
-            self._time_both_models()
-            if self._post_timing_recheck() is not None:
-                return self._compiled(correctness=False)
+        self._time_both_models()
+        if self._post_timing_recheck() is not None:
+            return self._compiled(correctness=False)
         return self._compiled(correctness=True)
 
     def _with_build_facts(self, result: dict[str, Any]) -> dict[str, Any]:
@@ -177,6 +174,9 @@ class SampleEvaluator:
 
     def _compiled(self, *, correctness: bool) -> dict[str, Any]:
         """Return a post-build payload from the fields collected so far."""
+        self.metadata["reference"] = self.ref_mode
+        if self.ref_npu_error:
+            self.metadata["reference_npu_error"] = self.ref_npu_error
         return compiled_result(
             correctness=correctness,
             metadata=self.metadata,
@@ -189,11 +189,11 @@ class SampleEvaluator:
     def _build_and_load(self) -> dict[str, Any] | None:
         """Compile and load libcustom_op.so; fail-payload on error."""
         asc_source = (self.sample_path / "custom_op.asc").read_text(encoding="utf-8")
-        self.metadata["build_mode"] = (
-            "split" if split_asc_source(asc_source) is not None else "legacy"
-        )
         started = time.monotonic()
         try:
+            self.metadata["build_mode"] = (
+                "split" if split_asc_source(asc_source) is not None else "legacy"
+            )
             self.so_path = build_custom_op(
                 asc_source,
                 self.sample_path,
@@ -454,36 +454,24 @@ class SampleEvaluator:
         def draw_inputs() -> list[Any]:
             return [self._process_input(item) for item in self.get_inputs()]
 
-        seed_torch(self.req.seed)
-        probe_inputs = draw_inputs()
-        input_bytes = tensor_nbytes(probe_inputs)
-        fresh_per_trial = input_bytes <= REFRESH_INPUT_BYTES_LIMIT
-        self.metadata["timing_fresh_inputs"] = bool(fresh_per_trial)
-        perf_box: list[Any] = [probe_inputs]
-        prev_box: list[Any] = [None]
-
-        def refresh_inputs() -> None:
-            prev_box[0] = perf_box[0]
-            perf_box[0] = draw_inputs()
-
-        def timed(fn: Any) -> list[float]:
-            seed_torch(self.req.seed)
-            return time_execution_with_npu_event(
-                lambda: fn(*perf_box[0]),
-                [],
-                num_warmup=self.req.num_warmup,
-                num_trials=self.req.num_perf_trials,
-                device=self.torch_device,
-                setup=refresh_inputs if fresh_per_trial else None,
-                l2_clear_size=self.req.l2_clear_size,
-            )
+        timer = AdaptiveInputTimer(
+            draw_inputs,
+            seed=self.req.seed,
+            num_warmup=self.req.num_warmup,
+            num_trials=self.req.num_perf_trials,
+            device=self.torch_device,
+            l2_clear_size=self.req.l2_clear_size,
+        )
+        self.metadata["timing_fresh_inputs"] = bool(timer.fresh_per_trial)
 
         try:
             with self.torch.no_grad():
-                self.runtime_stats = get_timing_stats(timed(self.new_model))
+                self.runtime_stats = get_timing_stats(timer.time(self.new_model))
                 self.runtime = self.runtime_stats["mean"]
                 if self.ref_mode == "npu":
-                    self.ref_runtime_stats = get_timing_stats(timed(self.ref_model))
+                    self.ref_runtime_stats = get_timing_stats(
+                        timer.time(self.ref_model)
+                    )
                     self.ref_runtime = self.ref_runtime_stats["mean"]
                     speedup = self.ref_runtime / self.runtime if self.runtime else 0.0
                     self.metadata["speedup"] = float(f"{speedup:.4g}")
@@ -500,7 +488,7 @@ class SampleEvaluator:
                     if isinstance(self.ref_runtime, int | float)
                     else None
                 ),
-                bytes_moved=input_bytes + tensor_nbytes(self.last_new_out),
+                bytes_moved=timer.input_bytes + tensor_nbytes(self.last_new_out),
                 bandwidth_gbps=float(self.req.memory_bandwidth_gbps),
                 flops=task_declared_flops(self.ref_globals),
                 peak_tflops=(

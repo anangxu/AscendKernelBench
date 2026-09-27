@@ -33,7 +33,7 @@ User scripts and the isolated eval worker add the checkout root to `sys.path` (`
 
 ### Missing `torch` or `torch_npu`
 
-`requirements.txt` installs PyTorch and `torch_npu` on Linux, but never the Ascend runtime stack itself. On a Linux host with CANN 9.1.0, recreate the experiment environment with `conda create -n AscendKernelBench python=3.12 -y`, then `conda activate AscendKernelBench`, `pip install -r requirements.txt`, and source `set_env.sh` (see [getting started](getting-started.md)). Use that same interpreter for evaluation; the CMake build receives it as `Python3_EXECUTABLE` and discovers PyTorch / `torch_npu` through it.
+`requirements.txt` installs PyTorch and `torch_npu` on Linux, but never the Ascend runtime stack itself. On a Linux host with CANN 9.1.0, recreate the experiment environment with `conda create -n AscendKernelBench python=3.12 -y`, then `conda activate AscendKernelBench`, `pip install -r requirements.txt`, and source `set_env.sh` (see [getting started](getting-started.md)). Use that same interpreter for evaluation; the CMake build receives it as `Python3_EXECUTABLE` and the worker passes its torch / `torch_npu` paths as CMake hints.
 
 Do not try to resolve a missing `torch_npu` import on macOS by substituting a CPU evaluation path. Move the saved sources to the prepared Ascend host instead. Some tasks also import optional libraries; inspect the task's imports when a reference module cannot load.
 
@@ -93,7 +93,7 @@ export CANN_SET_ENV='/absolute/path/to/cann/set_env.sh'
 
 If that file does not exist, the helper silently uses the current environment. Confirm the path or start from a correctly initialized CANN shell. The helper caches the sourced environment per Python process, so restart after changing toolchain settings. Its environment setup applies to build subprocesses; the evaluation Python process must already be able to import and use the Ascend runtime.
 
-The ACLNN CMake project requires CMake, the ASC toolchain, a suitable GCC toolchain, Python development files, PyTorch, and `torch_npu`. `Failed to locate libgcc.a` or `Failed to derive GCC toolchain root` points to compiler discovery; a missing header or library is usually clearer in `build/configure.log` or `build/build.log` than in the truncated result message.
+The CMake build requires CMake, the ASC toolchain, a suitable GCC toolchain, Python development files, PyTorch, and `torch_npu`. `Failed to locate libgcc.a` or `Failed to derive GCC toolchain root` points to compiler discovery; a missing header or library is usually clearer in `build/configure.log` or `build/build.log` than in the truncated result message.
 
 ### `configure failed`, `build failed`, or no built module
 

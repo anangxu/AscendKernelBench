@@ -65,9 +65,25 @@ def resolve_generation_settings(
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
 ) -> GenerationSettings:
-    """Resolve generation settings from YAML with optional CLI overrides."""
+    """Resolve generation settings from YAML with optional CLI overrides.
+
+    Raises:
+        ValueError: If the resolved sample count is not positive.
+    """
     gen_cfg = dict(config.generation)
-    effort = reasoning_effort or str(gen_cfg.get("reasoning_effort", "")).strip()
+    raw_effort = gen_cfg.get("reasoning_effort")
+    effort = (
+        str(reasoning_effort).strip()
+        if reasoning_effort is not None
+        else ("" if raw_effort is None else str(raw_effort).strip())
+    )
+    resolved_samples = (
+        int(gen_cfg.get("num_samples", 1)) if num_samples is None else int(num_samples)
+    )
+    if resolved_samples < 1:
+        raise ValueError(
+            f"num_samples must be a positive integer, got {resolved_samples}"
+        )
     return GenerationSettings(
         model=model or str(gen_cfg.get("model", "deepseek-flash")),
         prompt_mode=prompt_mode or str(gen_cfg.get("prompt_mode", "one_shot")),
@@ -79,11 +95,7 @@ def resolve_generation_settings(
             if max_tokens is None
             else int(max_tokens)
         ),
-        num_samples=(
-            int(gen_cfg.get("num_samples", 1))
-            if num_samples is None
-            else int(num_samples)
-        ),
+        num_samples=resolved_samples,
         reasoning_effort=effort or None,
     )
 
@@ -165,12 +177,9 @@ def generation_run_config(
     *,
     hardware_name: str,
     task_ids: list[str],
-    **extra: object,
+    hardware_file: str | None = None,
 ) -> dict[str, object]:
-    """Return the mapping written to generation_config.yaml.
-
-    Extra keyword arguments, such as device, are merged into the record.
-    """
+    """Return the mapping written to generation_config.yaml."""
     payload: dict[str, object] = {
         "model": settings.model,
         "temperature": settings.temperature,
@@ -181,5 +190,6 @@ def generation_run_config(
         "hardware": hardware_name,
         "tasks": list(task_ids),
     }
-    payload.update(extra)
+    if hardware_file:
+        payload["hardware_file"] = hardware_file
     return payload

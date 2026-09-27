@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from loguru import logger
@@ -69,15 +70,18 @@ def main() -> None:
         hardware=args.hardware,
     )
     config, hardware = runtime.config, runtime.hardware
-    settings = resolve_generation_settings(
-        config,
-        model=args.model,
-        prompt_mode=args.prompt_mode,
-        temperature=args.temperature,
-        num_samples=args.n_samples,
-        reasoning_effort=args.reasoning_effort,
-        max_tokens=args.max_tokens,
-    )
+    try:
+        settings = resolve_generation_settings(
+            config,
+            model=args.model,
+            prompt_mode=args.prompt_mode,
+            temperature=args.temperature,
+            num_samples=args.n_samples,
+            reasoning_effort=args.reasoning_effort,
+            max_tokens=args.max_tokens,
+        )
+    except ValueError as exc:
+        die(str(exc))
 
     tasks = select_tasks(
         level=args.level,
@@ -87,6 +91,12 @@ def main() -> None:
     if not tasks:
         die("no tasks found")
 
+    hardware_file = None
+    hardware_spec = args.hardware or config.hardware
+    candidate = Path(hardware_spec)
+    if candidate.is_file():
+        hardware_file = str(candidate.resolve())
+
     run_name = args.run_name or f"gen_{datetime.now():%Y%m%d_%H%M%S}"
     run_dir = rundir.create_run(
         run_name,
@@ -94,6 +104,7 @@ def main() -> None:
             settings,
             hardware_name=hardware.name,
             task_ids=[task.task_id for task in tasks],
+            hardware_file=hardware_file,
         ),
     )
     logger.info(

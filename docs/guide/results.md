@@ -32,7 +32,7 @@ runs/my_run/
 
 This is a representative layout, not a promise that every file exists. `response_raw.txt` is written when a raw response is available. Build artifacts/logs appear only after their stages run. `scripts/evaluate.py` writes both aggregate JSON files.
 
-`generation_config.yaml` records selected generation settings and tasks. It does not record the entire resolved evaluation configuration, driver/CANN versions, repository revision, or device state. Preserve those separately for reproducible comparisons. Using an existing run name can overwrite generated files and configuration; re-evaluation overwrites results.
+`generation_config.yaml` records selected generation settings, tasks, and the resolved hardware profile path when one was supplied. It does not record the entire resolved evaluation configuration, driver/CANN versions, repository revision, or device state. Preserve those separately for reproducible comparisons. Using an existing run name can overwrite generated files and configuration; re-evaluation overwrites results.
 
 ## Per-sample result schema
 

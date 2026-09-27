@@ -78,21 +78,9 @@ message(STATUS "GCC toolchain root: ${GCC_TOOLCHAIN_ROOT}")
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
 # build.py passes TORCH_CMAKE_PREFIX_PATH and TORCH_NPU_PATH from the
-# worker's own torch import, skipping two Python discovery subprocesses.
+# worker's own torch import; the template itself does not discover Python.
 if(NOT DEFINED TORCH_CMAKE_PREFIX_PATH OR NOT DEFINED TORCH_NPU_PATH)
-    execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env ASCEND_SLOG_PRINT_TO_STDOUT=0
-                ${Python3_EXECUTABLE} -c "import os, torch, torch_npu; print(torch.utils.cmake_prefix_path); print(os.path.dirname(torch_npu.__file__))"
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        OUTPUT_VARIABLE TORCH_DISCOVERY
-        RESULT_VARIABLE TORCH_DISCOVERY_RESULT
-    )
-    if(NOT TORCH_DISCOVERY_RESULT EQUAL 0)
-        message(FATAL_ERROR "torch / torch_npu discovery failed in ${Python3_EXECUTABLE}")
-    endif()
-    string(REPLACE "\n" ";" TORCH_DISCOVERY_LIST "${TORCH_DISCOVERY}")
-    list(GET TORCH_DISCOVERY_LIST 0 TORCH_CMAKE_PREFIX_PATH)
-    list(GET TORCH_DISCOVERY_LIST 1 TORCH_NPU_PATH)
+    message(FATAL_ERROR "TORCH_CMAKE_PREFIX_PATH and TORCH_NPU_PATH are required (supplied by build.py)")
 endif()
 find_package(Torch REQUIRED HINTS ${TORCH_CMAKE_PREFIX_PATH})
 
@@ -171,8 +159,6 @@ if(DEFINED ENV{ASCEND_HOME_PATH})
     endif()
 endif()
 set_property(TARGET custom_op PROPERTY BUILD_RPATH ${_CUSTOM_OP_RPATH})
-set_property(TARGET custom_op PROPERTY INSTALL_RPATH ${_CUSTOM_OP_RPATH})
-set_property(TARGET custom_op PROPERTY BUILD_WITH_INSTALL_RPATH TRUE)
 message(STATUS "custom_op RPATH: ${_CUSTOM_OP_RPATH}")
 ########################## RPATH ##########################
 

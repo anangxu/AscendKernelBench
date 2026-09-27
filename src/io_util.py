@@ -56,7 +56,7 @@ def read_json_object(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _write_text_atomic(path: Path, text: str) -> None:
+def write_text_atomic(path: Path, text: str) -> None:
     """Write UTF-8 text via a sibling temp file, fsync, then os.replace."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,11 +75,11 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 def write_json_atomic(path: Path, payload: Any) -> None:
     """Write payload as UTF-8 JSON via a temp file and os.replace."""
-    _write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
+    write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def write_yaml_atomic(path: Path, payload: Any) -> None:
     """Write payload as UTF-8 YAML via a temp file and os.replace."""
-    _write_text_atomic(
+    write_text_atomic(
         path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
     )

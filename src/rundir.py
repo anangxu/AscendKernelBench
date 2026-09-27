@@ -14,7 +14,12 @@ from typing import Any
 import yaml
 
 from ._paths import RUNS_DIR
-from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
+from .io_util import (
+    read_json_object,
+    write_json_atomic,
+    write_text_atomic,
+    write_yaml_atomic,
+)
 from .llm import AscendCGeneration
 
 
@@ -71,6 +76,14 @@ def generation_hardware_name(run_dir: Path) -> str | None:
     return None
 
 
+def generation_hardware_file(run_dir: Path) -> str | None:
+    """Return the hardware profile path recorded at generation time."""
+    path = _read_generation_config(run_dir).get("hardware_file")
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    return None
+
+
 _HARNESS_KEYS = (
     "model",
     "prompt_mode",
@@ -107,11 +120,11 @@ def save_sample(
     """Persist one generated sample (prompt, both deliverables, raw text)."""
     out_dir = sample_dir(run_dir, task_id, sample_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    (out_dir / "custom_op.asc").write_text(generation.custom_op_asc, encoding="utf-8")
-    (out_dir / "model_new.py").write_text(generation.model_new_py, encoding="utf-8")
+    write_text_atomic(out_dir / "prompt.txt", prompt)
+    write_text_atomic(out_dir / "custom_op.asc", generation.custom_op_asc)
+    write_text_atomic(out_dir / "model_new.py", generation.model_new_py)
     if raw_response:
-        (out_dir / "response_raw.txt").write_text(raw_response, encoding="utf-8")
+        write_text_atomic(out_dir / "response_raw.txt", raw_response)
     return out_dir
 
 

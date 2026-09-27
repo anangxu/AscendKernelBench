@@ -9,15 +9,14 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from .compare import move_value_to_device, tensor_nbytes
+from .compare import move_value_to_device
 from .eval_device import exec_python_source
 from .io_util import load_cfg_argv, pop_required_path, write_json_atomic
 from .runtime import npu_device_index, seed_torch, torch_dtype_for
 from .timing import (
     DEFAULT_L2_CLEAR_BYTES,
-    REFRESH_INPUT_BYTES_LIMIT,
+    AdaptiveInputTimer,
     get_timing_stats,
-    time_execution_with_npu_event,
 )
 
 
@@ -52,36 +51,22 @@ def measure_reference(cfg: dict[str, Any]) -> dict[str, Any]:
         seed_torch(cfg["seed"])
         model = model_cls(*get_init_inputs()).to(device=device, dtype=dtype)
         model.eval()
-        # Reseed after construction so the input sequence matches
-        # eval_device timing.
-        seed_torch(cfg["seed"])
-        box: list[Any] = [draw()]
-        prev: list[Any] = [None]
-        input_bytes = tensor_nbytes(box[0])
-        fresh_per_trial = input_bytes <= REFRESH_INPUT_BYTES_LIMIT
-
-        def refresh() -> None:
-            """Replace the live input set and keep the previous allocation."""
-            prev[0] = box[0]
-            box[0] = draw()
-
+        timer = AdaptiveInputTimer(
+            draw,
+            seed=cfg["seed"],
+            num_warmup=cfg["num_warmup"],
+            num_trials=cfg["num_perf_trials"],
+            device=device,
+            l2_clear_size=l2_clear_size,
+        )
         ############################### TIMING ###############################
-        seed_torch(cfg["seed"])
         torch.npu.synchronize(device=device)
         with torch.no_grad():
-            times = time_execution_with_npu_event(
-                lambda: model(*box[0]),
-                [],
-                num_warmup=cfg["num_warmup"],
-                num_trials=cfg["num_perf_trials"],
-                device=device,
-                setup=refresh if fresh_per_trial else None,
-                l2_clear_size=l2_clear_size,
-            )
+            times = timer.time(model)
         ############################### TIMING ###############################
         stats = get_timing_stats(times)
         stats["supported_on_npu"] = True
-        stats["timing_fresh_inputs"] = bool(fresh_per_trial)
+        stats["timing_fresh_inputs"] = bool(timer.fresh_per_trial)
         return stats
     except Exception as exc:
         return {"supported_on_npu": False, "error": repr(exc)}

@@ -12,7 +12,7 @@ Run these scripts from the checkout root. Each script adds the checkout root to 
 | `--task` and `--level` | In batch generation and baseline measurement, repeat `--task` to select tasks. It overrides `--level`. Omitting both selects all discovered tasks. |
 | `--tasks-file` | Generation only. A manifest of task IDs, one per line, with blank lines and `#` comments ignored; see `configs/subsets/`. `--task` overrides it. |
 | Run name | A directory name under `<repository>/runs/`. Use a simple, unique name such as `relu-demo`. There is no separate `--run-dir` option. |
-| `--hardware` | A profile name such as `ascend910b2`, or the path to an existing YAML file. |
+| `--hardware` | A profile name such as `ascend910b2`, or the path to an existing YAML file. Generation records an existing file path in `generation_config.yaml` so evaluation reloads it. |
 | `--config` | An evaluation YAML file. If omitted, loads `<repository>/configs/eval_default.yaml`. A relative path is resolved from the current working directory. |
 | `--device` | Device string used by generation-adjacent tools such as `baseline.py`, default `npu:0`. `evaluate.py` always uses `npu:0`; select a physical card with `ASCEND_RT_VISIBLE_DEVICES`. |
 

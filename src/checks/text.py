@@ -20,6 +20,12 @@ HOST_SECTION_MARKER_RE = re.compile(
 )
 
 
+def _byte_col_to_char_col(line: str, byte_col: int) -> int:
+    """Convert an AST UTF-8 byte column to a Python code-point column."""
+    prefix = line.encode("utf-8")[:byte_col]
+    return len(prefix.decode("utf-8", errors="ignore"))
+
+
 def mask_string_constants(source: str) -> str:
     """Blank string constants so embedded text cannot trip regex rules.
 
@@ -45,17 +51,30 @@ def mask_string_constants(source: str) -> str:
             and getattr(node, "end_col_offset", None) is not None
         ):
             continue
-        start = offsets[node.lineno - 1] + node.col_offset
-        end = offsets[node.end_lineno - 1] + node.end_col_offset
+        start = offsets[node.lineno - 1] + _byte_col_to_char_col(
+            lines[node.lineno - 1], node.col_offset
+        )
+        end = offsets[node.end_lineno - 1] + _byte_col_to_char_col(
+            lines[node.end_lineno - 1], node.end_col_offset
+        )
         ranges.append((start, end))
 
     if not ranges:
         return source
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
     parts: list[str] = []
     cursor = 0
-    for start, end in sorted(ranges):
+    for start, end in merged:
         parts.append(source[cursor:start])
-        parts.append(" " * (end - start))
+        parts.append(
+            "".join("\n" if char == "\n" else " " for char in source[start:end])
+        )
         cursor = end
     parts.append(source[cursor:])
     return "".join(parts)
@@ -87,19 +106,87 @@ def strip_python_comments(code: str) -> str:
     return "".join(chars)
 
 
-def strip_cpp_comments(code: str) -> str:
-    """Blank C++ comments so markers inside comments do not count."""
-    code = re.sub(
-        r"/\*.*?\*/",
-        lambda match: " " * (match.end() - match.start()),
-        code,
-        flags=re.DOTALL,
-    )
-    return re.sub(
-        r"//[^\n]*",
-        lambda match: " " * (match.end() - match.start()),
-        code,
-    )
+def _blank_span(chars: list[str], start: int, end: int) -> None:
+    """Replace non-newline characters in chars[start:end] with spaces."""
+    for index in range(start, min(end, len(chars))):
+        if chars[index] != "\n":
+            chars[index] = " "
+
+
+def _raw_string_end(code: str, index: int) -> int | None:
+    """Return the exclusive end of a C++ raw string, or None."""
+    for prefix in ('u8R"', 'uR"', 'UR"', 'LR"', 'R"'):
+        if not code.startswith(prefix, index):
+            continue
+        start = index + len(prefix)
+        open_paren = code.find("(", start)
+        if open_paren == -1:
+            return None
+        delimiter = code[start:open_paren]
+        close = ")" + delimiter + '"'
+        end = code.find(close, open_paren + 1)
+        return None if end == -1 else end + len(close)
+    return None
+
+
+def _is_digit_separator(code: str, index: int) -> bool:
+    """Return True for a C++14 digit separator such as 1'000."""
+    if index <= 0 or index + 1 >= len(code):
+        return False
+    hex_digits = "0123456789abcdefABCDEF"
+    return code[index - 1] in hex_digits and code[index + 1] in hex_digits
+
+
+def strip_cpp_comments(code: str, *, mask_literals: bool = False) -> str:
+    """Blank C++ comments in place, keeping literal content visible.
+
+    Comment delimiters inside ordinary string and character literals do not
+    start a comment, so a literal such as "/*" cannot hide the code after
+    it. With mask_literals set, literal contents are blanked as well; the
+    default keeps quoted include paths visible to include checks. Newlines
+    are preserved so line-oriented patterns keep working.
+    """
+    chars = list(code)
+    index = 0
+    length = len(chars)
+    while index < length:
+        char = code[index]
+        next_char = code[index + 1] if index + 1 < length else ""
+        raw_end = _raw_string_end(code, index)
+        if raw_end is not None:
+            if mask_literals:
+                _blank_span(chars, index, raw_end)
+            index = raw_end
+        elif char == "'" and _is_digit_separator(code, index):
+            index += 1
+        elif char == "/" and next_char == "/":
+            end = code.find("\n", index)
+            if end == -1:
+                end = length
+            _blank_span(chars, index, end)
+            index = end
+        elif char == "/" and next_char == "*":
+            end = code.find("*/", index + 2)
+            end = length if end == -1 else end + 2
+            _blank_span(chars, index, end)
+            index = end
+        elif char in {'"', "'"}:
+            quote = char
+            cursor = index + 1
+            while cursor < length:
+                if code[cursor] == "\\":
+                    cursor += 2
+                    continue
+                if code[cursor] == quote:
+                    cursor += 1
+                    break
+                cursor += 1
+            if mask_literals:
+                _blank_span(chars, index, cursor)
+            index = cursor
+        else:
+            index += 1
+    return "".join(chars)
 
 
 def prepare_python_source(source: str) -> str:

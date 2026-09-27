@@ -9,13 +9,17 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Protocol
+from collections.abc import Callable
 
 from loguru import logger
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .checks.text import HOST_SECTION_MARKER
+from .checks.text import (
+    HOST_SECTION_MARKER,
+    HOST_SECTION_MARKER_RE,
+    strip_cpp_comments,
+)
 
 _FENCE_EDGE_RE = re.compile(
     r"^\s*```[A-Za-z0-9_+.-]*\s*\n(?P<body>.*?)\n?\s*```\s*$", re.DOTALL
@@ -73,18 +77,6 @@ class GenerationResult(BaseModel):
 
     generation: AscendCGeneration
     raw_text: str
-    model: str
-    usage: dict
-
-
-class ResponseParser(Protocol):
-    """Strategy for turning a chat transcript into deliverables."""
-
-    name: str
-
-    def parse(self, messages: list[dict]) -> GenerationResult:
-        """Parse messages into a GenerationResult."""
-        ...
 
 
 STRUCTURED_OUTPUT_NOTE = (
@@ -97,18 +89,12 @@ STRUCTURED_OUTPUT_NOTE = (
 )
 
 
-def _usage_dict(response: object) -> dict:
-    """Return response.usage as a dict, or {} when absent."""
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return {}
-    dump = getattr(usage, "model_dump", None)
-    return dump() if callable(dump) else {}
-
-
 _MIN_ASC_KERNEL_MARKERS = ("__global__", "__vector__")
-_MIN_ASC_BINDING_MARKERS = ("TORCH_LIBRARY", "TORCH_LIBRARY_IMPL")
-_MIN_ASC_LAYOUT_MARKERS = (HOST_SECTION_MARKER,)
+_ASC_BINDING_MARKERS = (
+    (r"\bTORCH_LIBRARY\s*\(", "TORCH_LIBRARY(...)"),
+    (r"\bTORCH_LIBRARY_IMPL\s*\(", "TORCH_LIBRARY_IMPL(...)"),
+)
+_ASC_PYBIND_RE = re.compile(r'#\s*include\s*[<"]pybind11/')
 _MIN_PY_MARKERS = ("class ModelNew", "torch.ops.custom_op")
 
 
@@ -119,20 +105,22 @@ def validate_generation(gen: AscendCGeneration) -> list[str]:
         Human-readable problems; empty means the fields look complete.
     """
     problems = []
+    code = strip_cpp_comments(gen.custom_op_asc)
+    masked = strip_cpp_comments(gen.custom_op_asc, mask_literals=True)
     for marker in _MIN_ASC_KERNEL_MARKERS:
-        if marker not in gen.custom_op_asc:
+        if marker not in masked:
             problems.append(f"custom_op_asc missing {marker!r}")
-    for marker in _MIN_ASC_BINDING_MARKERS:
-        if marker not in gen.custom_op_asc:
-            problems.append(f"custom_op_asc missing {marker!r}")
-    for marker in _MIN_ASC_LAYOUT_MARKERS:
-        if marker not in gen.custom_op_asc:
-            problems.append(
-                f"custom_op_asc missing the {marker!r} separator comment "
-                "between the device and host sections"
-            )
-    if "PYBIND11_MODULE" in gen.custom_op_asc:
-        problems.append("custom_op_asc must not use PYBIND11_MODULE")
+    for pattern, label in _ASC_BINDING_MARKERS:
+        if not re.search(pattern, masked):
+            problems.append(f"custom_op_asc missing {label}")
+    marker_lines = len(HOST_SECTION_MARKER_RE.findall(gen.custom_op_asc))
+    if marker_lines != 1:
+        problems.append(
+            f"custom_op_asc must carry exactly one {HOST_SECTION_MARKER!r} "
+            f"separator comment line ({marker_lines} found)"
+        )
+    if "PYBIND11_MODULE" in masked or _ASC_PYBIND_RE.search(code):
+        problems.append("custom_op_asc must not use pybind11")
     for marker in _MIN_PY_MARKERS:
         if marker not in gen.model_new_py:
             problems.append(f"model_new_py missing {marker!r}")
@@ -157,7 +145,6 @@ class LLMClient:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.reasoning_effort = reasoning_effort
         self.extra_body = (
             {"reasoning_effort": reasoning_effort} if reasoning_effort else None
         )
@@ -205,43 +192,35 @@ class LLMClient:
 
     ################################ PROTOCOL ################################
 
-    def _parsers(self) -> tuple[ResponseParser, ...]:
-        """Return structured parse first, then fenced-block fallback."""
+    def _attempt_parsers(
+        self,
+    ) -> tuple[tuple[str, Callable[[list[dict]], GenerationResult]], ...]:
+        """Return structured parsing first, then the plain fallback."""
         return (
-            StructuredOutputParser(self),
-            FencedBlockParser(self),
+            ("structured", self._parse_structured),
+            ("fenced", self._parse_fenced),
         )
 
     def _generate_once(self, messages: list[dict]) -> GenerationResult:
-        """Request one completion; fall back to fenced-block extraction."""
+        """Request one completion; fall back to plain extraction."""
         last_error: Exception | None = None
-        for parser in self._parsers():
+        for name, parser in self._attempt_parsers():
             try:
-                return parser.parse(messages)
+                return parser(messages)
             except Exception as exc:
                 last_error = exc
-                logger.debug("LLM parser {} failed: {}", parser.name, exc)
+                logger.debug("LLM parser {} failed: {}", name, exc)
         raise last_error or ValueError("no LLM response parser succeeded")
 
-
-class StructuredOutputParser:
-    """Parse the OpenAI structured-output schema into deliverables."""
-
-    name = "structured"
-
-    def __init__(self, llm: LLMClient) -> None:
-        """Bind the parent client (model, temperature, token budget)."""
-        self._llm = llm
-
-    def parse(self, messages: list[dict]) -> GenerationResult:
-        """Parse a structured-output response into the two deliverables."""
-        response = self._llm.client.beta.chat.completions.parse(
-            model=self._llm.model,
+    def _parse_structured(self, messages: list[dict]) -> GenerationResult:
+        """Parse the OpenAI structured-output schema into deliverables."""
+        response = self.client.beta.chat.completions.parse(
+            model=self.model,
             messages=messages,
             response_format=AscendCGeneration,
-            temperature=self._llm.temperature,
-            max_tokens=self._llm.max_tokens,
-            extra_body=self._llm.extra_body,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            extra_body=self.extra_body,
         )
         parsed = response.choices[0].message.parsed
         if parsed is None:
@@ -249,28 +228,16 @@ class StructuredOutputParser:
         return GenerationResult(
             generation=parsed,
             raw_text=response.choices[0].message.content or "",
-            model=self._llm.model,
-            usage=_usage_dict(response),
         )
 
-
-class FencedBlockParser:
-    """Complete without a schema and extract fenced code blocks."""
-
-    name = "fenced"
-
-    def __init__(self, llm: LLMClient) -> None:
-        """Bind the parent client (model, temperature, token budget)."""
-        self._llm = llm
-
-    def parse(self, messages: list[dict]) -> GenerationResult:
-        """Complete without a schema and extract fenced code blocks."""
-        response = self._llm.client.chat.completions.create(
-            model=self._llm.model,
+    def _parse_fenced(self, messages: list[dict]) -> GenerationResult:
+        """Complete without a schema and extract the two deliverables."""
+        response = self.client.chat.completions.create(
+            model=self.model,
             messages=messages,
-            temperature=self._llm.temperature,
-            max_tokens=self._llm.max_tokens,
-            extra_body=self._llm.extra_body,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            extra_body=self.extra_body,
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -282,8 +249,6 @@ class FencedBlockParser:
         return GenerationResult(
             generation=extract_generation(raw),
             raw_text=raw,
-            model=self._llm.model,
-            usage=_usage_dict(response),
         )
 
 

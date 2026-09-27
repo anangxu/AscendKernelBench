@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 
+from .rules import TENSOR_COMPUTE_METHODS
+
 # nn names that are structure, not compute: constructing them is always fine.
 _STRUCTURAL_NN_NAMES = {
     "Module",
@@ -12,8 +14,6 @@ _STRUCTURAL_NN_NAMES = {
     "ParameterDict",
     "ModuleList",
     "ModuleDict",
-    "init",
-    "parameter",
 }
 
 # torch.<name>() calls allowed in the wrapper: allocation, metadata, and data
@@ -79,76 +79,26 @@ _TORCH_ALLOWED_CALLS = {
     "flip",
 }
 
-_TENSOR_COMPUTE_METHODS = {
-    "matmul",
-    "mm",
-    "bmm",
-    "addmm",
-    "baddbmm",
-    "dot",
+_TENSOR_COMPUTE_METHODS = set(TENSOR_COMPUTE_METHODS) | {
+    "clamp_",
     "cross",
-    "mv",
-    "ger",
-    "outer",
+    "cumprod",
+    "dot",
     "einsum",
-    "relu",
-    "relu_",
-    "sigmoid",
-    "sigmoid_",
-    "tanh",
-    "tanh_",
-    "gelu",
-    "silu",
-    "softmax",
-    "log_softmax",
-    "leaky_relu",
-    "elu",
-    "selu",
     "hardsigmoid",
     "hardswish",
-    "softplus",
-    "softsign",
-    "mish",
-    "add",
-    "add_",
-    "sub",
-    "sub_",
-    "mul",
-    "mul_",
-    "div",
-    "div_",
-    "pow",
-    "pow_",
-    "sum",
-    "mean",
-    "max",
-    "min",
-    "amax",
-    "amin",
-    "argmax",
-    "argmin",
-    "prod",
-    "norm",
-    "var",
-    "std",
-    "cumsum",
-    "cumprod",
-    "topk",
-    "sort",
-    "logsumexp",
-    "clamp",
-    "clamp_",
-    "conv1d",
-    "conv2d",
-    "conv3d",
-    "gather",
-    "scatter",
-    "scatter_",
-    "index_select",
     "index_add",
+    "logsumexp",
     "masked_fill",
     "masked_fill_",
     "masked_select",
+    "max",
+    "min",
+    "mish",
+    "pow_",
+    "scatter_",
+    "softplus",
+    "softsign",
 }
 
 _BANNED_IMPORT_ROOTS = {"ctypes", "subprocess", "socket", "importlib"}
@@ -167,15 +117,12 @@ _SCALAR_BUILTINS = {
     "len",
     "int",
     "float",
-    "round",
-    "abs",
-    "min",
-    "max",
-    "sum",
     "str",
     "bool",
     "repr",
 }
+# These builtins are scalar only when every argument is scalar.
+_SCALAR_IF_ARGUMENTS_ARE_SCALAR = {"round", "abs", "min", "max", "sum"}
 _SCALAR_METHODS = {"numel", "nelement", "dim", "size", "item", "__len__"}
 _ARITH_OPS = (
     ast.Add,
@@ -199,11 +146,12 @@ class WrapperSemantics(ast.NodeVisitor):
         self.co_refs: set[str] = set()
         self.holders: set[str] = set()
         self.scalar_refs: set[str] = set()
+        self.tensor_refs: set[str] = set()
         self.calls_custom_op = False
         tree = ast.parse(source)
         self._collect_aliases(tree)
-        for _ in range(3):
-            self._collect_bindings(tree)
+        self._collect_forward_params(tree)
+        self._collect_bindings_to_fixpoint(tree)
         self.visit(tree)
         if not self.calls_custom_op:
             self.violations.append(
@@ -239,6 +187,22 @@ class WrapperSemantics(ast.NodeVisitor):
                 self._record_import(node)
             elif isinstance(node, ast.ImportFrom):
                 self._record_import_from(node)
+
+    def _collect_forward_params(self, tree: ast.AST) -> None:
+        """Record forward/__call__ parameters as likely tensor names."""
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name not in {"forward", "__call__"}:
+                continue
+            args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            for arg in args:
+                if arg.arg != "self":
+                    self.tensor_refs.add(arg.arg)
+            if node.args.vararg:
+                self.tensor_refs.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                self.tensor_refs.add(node.args.kwarg.arg)
 
     def _record_import(self, node: ast.Import) -> None:
         """Bind import names and reject custom_op / banned roots."""
@@ -286,6 +250,18 @@ class WrapperSemantics(ast.NodeVisitor):
                 continue
             for target in targets:
                 self._bind_one_target(target, value)
+
+    def _collect_bindings_to_fixpoint(self, tree: ast.AST) -> None:
+        """Repeat binding propagation until no new name is classified."""
+        while True:
+            state = (len(self.scalar_refs), len(self.co_refs), len(self.holders))
+            self._collect_bindings(tree)
+            if state == (
+                len(self.scalar_refs),
+                len(self.co_refs),
+                len(self.holders),
+            ):
+                return
 
     def _assignment_parts(self, node: ast.AST) -> tuple[list[ast.AST], ast.AST] | None:
         """Return assignment targets and value, or bind a range loop."""
@@ -387,12 +363,28 @@ class WrapperSemantics(ast.NodeVisitor):
         """Return True for builtins, tensor metadata methods, or math.*."""
         func = node.func
         if isinstance(func, ast.Name):
-            return func.id in _SCALAR_BUILTINS
+            if func.id in _SCALAR_BUILTINS:
+                return True
+            if func.id in _SCALAR_IF_ARGUMENTS_ARE_SCALAR:
+                return not any(self._is_known_tensor(arg) for arg in node.args)
+            return False
         if isinstance(func, ast.Attribute):
             if func.attr in _SCALAR_METHODS:
                 return True
             path = self._resolve(func)
             return bool(path and path.startswith("math."))
+        return False
+
+    def _is_known_tensor(self, node: ast.AST) -> bool:
+        """Return True for values known to carry tensor data."""
+        if isinstance(node, ast.Name):
+            return node.id in self.tensor_refs or node.id in self.co_refs
+        if isinstance(node, ast.Attribute):
+            key = self._resolve(node)
+            return bool(key and (key in self.tensor_refs or key in self.co_refs))
+        if isinstance(node, ast.Call):
+            path = self._resolve(node.func)
+            return bool(path and self._is_custom_op_path(path))
         return False
 
     def _is_nn_layer_call(self, node: ast.AST) -> bool:
@@ -436,7 +428,8 @@ class WrapperSemantics(ast.NodeVisitor):
             self.calls_custom_op = True
             self.generic_visit(node)
             return
-        flagged = self._flag_holder_or_dynamic(node)
+        flagged = self._flag_dynamic_attribute_call(node)
+        flagged = self._flag_holder_or_dynamic(node) or flagged
         if func_path is not None:
             flagged = self._flag_resolved_call(func_path) or flagged
         if (
@@ -449,6 +442,42 @@ class WrapperSemantics(ast.NodeVisitor):
                 "compute must live in the Ascend C kernel"
             )
         self.generic_visit(node)
+
+    def _flag_dynamic_attribute_call(self, node: ast.Call) -> bool:
+        """Flag getattr-style dispatch to a tensor compute method."""
+        func = node.func
+        if not isinstance(func, ast.Call) or not func.args:
+            return False
+        if isinstance(func.func, ast.Name) and func.func.id == "getattr":
+            if len(func.args) < 2:
+                return False
+            name = self._constant_string(func.args[1])
+            if name in _TENSOR_COMPUTE_METHODS:
+                self._flag(
+                    f"getattr() dynamic dispatch to compute method .{name}() — "
+                    "compute must live in the Ascend C kernel"
+                )
+                return True
+            return False
+        if isinstance(func.func, ast.Attribute) and func.func.attr in {
+            "__getattribute__",
+            "__getattr__",
+        }:
+            name = self._constant_string(func.args[0])
+            if name in _TENSOR_COMPUTE_METHODS:
+                self._flag(
+                    f"dynamic dispatch to compute method .{name}() — "
+                    "compute must live in the Ascend C kernel"
+                )
+                return True
+        return False
+
+    @staticmethod
+    def _constant_string(node: ast.AST) -> str | None:
+        """Return a literal string argument, or None."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return None
 
     def _flag_holder_or_dynamic(self, node: ast.Call) -> bool:
         """Flag nn-layer invocation and dynamic/getattr torch access."""
@@ -464,6 +493,14 @@ class WrapperSemantics(ast.NodeVisitor):
         name = node.func.id
         if name in _DYNAMIC_CALLS:
             self._flag(f"dynamic code execution ({name}())")
+            return True
+        if name in _SCALAR_IF_ARGUMENTS_ARE_SCALAR and any(
+            self._is_known_tensor(arg) for arg in node.args
+        ):
+            self._flag(
+                f"{name}() on tensor arguments — tensor compute must "
+                "live in the Ascend C kernel"
+            )
             return True
         if name == "getattr" and node.args:
             base = self._resolve(node.args[0])

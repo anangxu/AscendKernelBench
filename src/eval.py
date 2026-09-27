@@ -6,11 +6,11 @@ worker subprocess started by evaluate_run.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import yaml
 from loguru import logger
 
 from . import rundir
@@ -38,8 +38,16 @@ __all__ = [
 ]
 
 
-def _persist_eval_result(sample_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
-    """Write eval_result.json when sample_dir exists and return it."""
+def _persist_eval_result(
+    sample_dir: Path,
+    result: dict[str, Any],
+    *,
+    harness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach harness metadata, write eval_result.json, and return result."""
+    metadata = result.get("metadata")
+    if harness and isinstance(metadata, dict):
+        metadata["harness"] = harness
     if Path(sample_dir).is_dir():
         write_json_atomic(Path(sample_dir) / "eval_result.json", result)
     return result
@@ -48,6 +56,12 @@ def _persist_eval_result(sample_dir: Path, result: dict[str, Any]) -> dict[str, 
 def _load_run_settings(run_dir: Path) -> tuple[EvalConfig, HardwareProfile]:
     """Load the default protocol and the hardware recorded for run_dir."""
     config = load_eval_config()
+    hardware_file = rundir.generation_hardware_file(run_dir)
+    if hardware_file:
+        try:
+            return config, load_hardware_profile(hardware_file)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            logger.warning("ignoring recorded hardware_file {}: {}", hardware_file, exc)
     hw_name = rundir.generation_hardware_name(run_dir) or config.hardware
     return config, load_hardware_profile(hw_name)
 
@@ -58,6 +72,7 @@ def eval_sample(
     *,
     hardware: HardwareProfile,
     config: EvalConfig,
+    harness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
 
@@ -73,6 +88,7 @@ def eval_sample(
             fail_result(
                 compilation_error=("sample dir missing custom_op.asc or model_new.py")
             ),
+            harness=harness,
         )
 
     violations = check_custom_op_asc(asc_path.read_text(encoding="utf-8"))
@@ -84,6 +100,7 @@ def eval_sample(
                 compilation_error="; ".join(violations),
                 static_check_error=violations,
             ),
+            harness=harness,
         )
 
     timeout_s = config.eval_timeout + 2 * config.build_timeout
@@ -95,7 +112,6 @@ def eval_sample(
             "cmake_arch": hardware.cmake_arch,
             "hardware_name": hardware.name,
             "device": "npu:0",
-            "measure_performance": True,
             "seed": config.seed,
             "num_correct_trials": config.num_correct_trials,
             "num_perf_trials": config.num_perf_trials,
@@ -110,7 +126,7 @@ def eval_sample(
         },
         timeout_s=timeout_s,
     )
-    return _persist_eval_result(sample_dir, result)
+    return _persist_eval_result(sample_dir, result, harness=harness)
 
 
 def evaluate_run(
@@ -148,11 +164,8 @@ def evaluate_run(
             sample_path,
             hardware=hardware,
             config=config,
+            harness=harness,
         )
-        metadata = result.get("metadata")
-        if harness and isinstance(metadata, dict):
-            metadata["harness"] = harness
-            write_json_atomic(sample_path / "eval_result.json", result)
         if on_sample is not None:
             on_sample(task_id, sample_id, result)
 
@@ -192,7 +205,3 @@ def _run_eval_worker(cfg: dict[str, Any], timeout_s: int) -> dict[str, Any]:
     return fail_result(
         runtime_error=outcome.parse_error or "worker produced no result.json"
     )
-
-
-if __name__ == "__main__":
-    worker_main(sys.argv)

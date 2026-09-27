@@ -58,11 +58,19 @@ def eval_result_lines(result: dict[str, object]) -> tuple[str, list[str]]:
         and isinstance(ref_runtime, int | float)
         and runtime
     ):
-        speedup = ref_runtime / runtime
-        lines.append(
-            f"runtime: {runtime:.4f} ms "
-            f"(ref {ref_runtime:.4f} ms, speedup {speedup:.2f}x)"
-        )
+        from .score import sample_speedup
+
+        speedup = sample_speedup(result)
+        if speedup is None:
+            lines.append(
+                f"runtime: {runtime:.4f} ms "
+                f"(ref {ref_runtime:.4f} ms; speedup not eligible)"
+            )
+        else:
+            lines.append(
+                f"runtime: {runtime:.4f} ms "
+                f"(ref {ref_runtime:.4f} ms, speedup {speedup:.2f}x)"
+            )
     metadata = result.get("metadata") or {}
     if isinstance(metadata, dict):
         err = metadata.get("compilation_error") or metadata.get("runtime_error")

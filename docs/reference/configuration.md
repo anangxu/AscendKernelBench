@@ -10,13 +10,13 @@ Evaluation settings live in `configs/eval_default.yaml`. Hardware descriptions l
 
 A custom YAML file **replaces** the default file; the loader does not merge files. Nested mappings such as `tolerances` and `generation` are not recursively merged with the default YAML. Unknown top-level keys are silently ignored, so a misspelled key may appear to work while leaving the default in effect. The loader does not provide comprehensive value/range validation.
 
-Evaluation reads the `hardware` field from an existing run's `generation_config.yaml` when present. Other evaluation protocol values always come from `configs/eval_default.yaml`. Generation scripts still accept `--config` and `--hardware`.
+Evaluation reads `hardware_file` from an existing run's `generation_config.yaml` first, then the `hardware` field, when present. Other evaluation protocol values always come from `configs/eval_default.yaml`. Generation scripts still accept `--config` and `--hardware`.
 
 ## Evaluation settings
 
 | Key | Default | Behavior |
 | --- | --- | --- |
-| `hardware` | `ascend910b2` | Default hardware profile name. Evaluation prefers the name recorded in the run's `generation_config.yaml`. Generation still accepts `--hardware`. |
+| `hardware` | `ascend910b2` | Default hardware profile name. Evaluation prefers `hardware_file`, then the name recorded in the run's `generation_config.yaml`. Generation still accepts `--hardware`. |
 | `num_correct_trials` | `5` | Number of seeded correctness trials. Every trial must pass. |
 | `seed` | `42` | Seed used for model initialization, correctness seed generation, and performance inputs. |
 | `precision` | `fp32` | Floating-point precision. Use `fp32`, `fp16`, or `bf16`. Integer and Boolean tensors retain their types. |
@@ -55,9 +55,7 @@ These are nested under `generation`:
 | `prompt_mode` | `one_shot` | `generate.py` |
 | `reasoning_effort` | `high` | `generate.py`, or `--reasoning-effort` |
 
-`reasoning_effort` is sent as a request parameter only when set; leave it
-empty for endpoints that reject it. Reasoning tokens count against
-`max_tokens`.
+`num_samples` must be a positive integer; `generate.py` exits with a clear error when the resolved value is zero or negative. `reasoning_effort` is sent as a request parameter only when set; an empty or null YAML value is treated as unset for endpoints that reject it. Reasoning tokens count against `max_tokens`.
 
 The model name is passed to your endpoint. Set it to a model your service supports. `zero_shot` omits examples, `one_shot` uses the first bundled example, and `few_shot` uses all bundled examples. The repository currently ships two examples (elementwise add and LeakyReLU).
 
@@ -124,7 +122,7 @@ These are configuration values, not automatic hardware detection or a claim that
 | `supported_dtypes` | No; defaults to `[]` | Data type names included in the prompt; does not itself enforce runtime support. |
 | `api_style` | No; defaults to an empty string | Free-form instructions inserted into the hardware prompt block. |
 
-Pass a custom profile with `--hardware configs/hardware/my-device.yaml`, or save it under `configs/hardware/my-device.yaml` and use `--hardware my-device`. An existing file path is tried first, relative to the current working directory when applicable; otherwise, the loader looks for `<repository>/configs/hardware/<value>.yaml`.
+Pass a custom profile with `--hardware configs/hardware/my-device.yaml`, or save it under `configs/hardware/my-device.yaml` and use `--hardware my-device`. An existing file path is tried first, relative to the current working directory when applicable; otherwise, the loader looks for `<repository>/configs/hardware/<value>.yaml`. When generation is given an existing file path, `generation_config.yaml` records its absolute path as `hardware_file`, and evaluation prefers that path before falling back to the profile name.
 
 ## Environment variables
 
@@ -133,7 +131,7 @@ Pass a custom profile with `--hardware configs/hardware/my-device.yaml`, or save
 | `OPENAI_BASE_URL` | Endpoint URL used by `LLMClient`. The CLI has no endpoint URL flag. |
 | `OPENAI_API_KEY` | Credential passed to the endpoint client. The CLI has no API key flag. |
 | `CANN_SET_ENV` | Path to the environment script used by the build helper. Defaults to `/usr/local/Ascend/cann-9.1.0/set_env.sh`. |
-| `ASCEND_KERNEL_BENCH_ENABLE_CCACHE` | When set to `1` / `true` / `yes` / `on`, the ACLNN CMake configure step receives `-DENABLE_CCACHE=ON`. |
+| `ASCEND_KERNEL_BENCH_ENABLE_CCACHE` | When set to `1` / `true` / `yes` / `on`, the CMake configure step receives `-DENABLE_CCACHE=ON`. |
 | `ASCEND_KERNEL_BENCH_CACHE_DIR` | Override the cache root holding the shared host-TU precompiled header. Defaults to `$XDG_CACHE_HOME/ascend-kernel-bench` or `~/.cache/ascend-kernel-bench`. |
 | `ASCEND_KERNEL_BENCH_DISABLE_PCH` | When set to `1` / `true` / `yes` / `on`, the split build compiles the host glue without the precompiled header. |
 | `ASCEND_SLOG_PRINT_TO_STDOUT` | The build/evaluation code defaults this to `0` in child environments when it is unset, to reduce runtime log output. |
