@@ -291,6 +291,106 @@ def test_ascendc_build_path_untouched() -> None:
             )
 
 
+def test_unsupported_dtype_is_reported_not_casted() -> None:
+    """A dtype pyasc cannot marshal is an explicit backend-wide failure."""
+    from src.eval_device import _pyasc_failure_kind
+    from src.score import summarize_eval_results
+
+    class FakeTensor:
+        def __init__(self, dtype: str) -> None:
+            self.dtype = dtype
+
+    def evaluator_for(dtype: str):
+        ev = SampleEvaluator(make_request(Path(tempfile.mkdtemp()), "pyasc"))
+        ev.torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None))
+        ev.get_inputs = lambda: [FakeTensor(dtype)]
+        ev._process_input = lambda value: value
+        called = {"n": 0}
+
+        def model(*args: object) -> None:
+            called["n"] += 1
+
+        ev.new_model = model
+        return ev, called
+
+    original_seed = eval_device.seed_torch
+    eval_device.seed_torch = lambda value: None
+    try:
+        ev, called = evaluator_for("torch.bfloat16")
+        result = ev._warm_up_pyasc()
+        assert result is not None
+        metadata = result["metadata"]
+        check("bf16 is not compiled", result["compiled"] is False)
+        check(
+            "bf16 reports unsupported_dtype",
+            metadata.get("failure_stage") == "unsupported_dtype",
+            repr(metadata.get("failure_stage")),
+        )
+        check(
+            "bf16 is a backend-wide limitation",
+            metadata.get("limitation_scope") == "backend",
+            repr(metadata.get("limitation_scope")),
+        )
+        check(
+            "bf16 names the dtype",
+            metadata.get("unsupported_dtypes") == ["bfloat16"],
+            repr(metadata.get("unsupported_dtypes")),
+        )
+        check("bf16 never reaches the kernel", called["n"] == 0, repr(called))
+
+        ev_ok, _ = evaluator_for("torch.float32")
+        ev_ok.new_model = lambda *args: None
+        ev_ok._construct_models = lambda: None
+        result_ok = ev_ok._warm_up_pyasc()
+        check(
+            "fp32 is not classified as unsupported",
+            result_ok is None
+            or result_ok["metadata"].get("failure_stage") != "unsupported_dtype",
+        )
+    finally:
+        eval_device.seed_torch = original_seed
+
+    check(
+        "UnsupportedSyntaxError is an operator-level limit",
+        _pyasc_failure_kind(RuntimeError("x UnsupportedSyntaxError y"))
+        == ("unsupported_operator", "operator"),
+    )
+    check(
+        "other first-call failures stay jit",
+        _pyasc_failure_kind(RuntimeError("boom")) == ("jit", "none"),
+    )
+
+    summary = summarize_eval_results(
+        {
+            "level1/901_add_smoke": [
+                {
+                    "compiled": False,
+                    "correctness": False,
+                    "metadata": {
+                        "failure_stage": "unsupported_dtype",
+                        "limitation_scope": "backend",
+                    },
+                },
+                {
+                    "compiled": True,
+                    "correctness": True,
+                    "metadata": {"reference": "npu"},
+                },
+            ]
+        }
+    )
+    check(
+        "summary keeps the unsupported count",
+        summary.get("unsupported_dtype_backend_wide") == 1,
+        repr(summary.get("unsupported_dtype_backend_wide")),
+    )
+    check(
+        "unsupported sample is not counted correct",
+        summary.get("correct") == 1,
+        repr(summary.get("correct")),
+    )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -307,10 +407,16 @@ def main() -> int:
         eval_device.seed_torch = original_seed
     test_ascendc_build_path_untouched()
     test_pyasc_timing_validation()
+    test_unsupported_dtype_is_reported_not_casted()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")
         return 1
+    print(
+        "skip - device check that a bfloat16 task produces correct output: "
+        "pyasc 1.1.1 dtype table rejects bfloat16 and bool, so the harness "
+        "reports unsupported_dtype instead of running it"
+    )
     print("all eval-backend checks passed")
     return 0
 

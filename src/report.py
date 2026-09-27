@@ -128,6 +128,16 @@ def print_eval_report(
         "hidden-distribution failures",
         str(summary.get("hidden_failed", 0)),
     )
+    # Shown even when zero: an unsupported backend is a coverage gap, not a
+    # model failure, and must not be readable as a pass.
+    table.add_row(
+        "unsupported dtype (backend)",
+        str(summary.get("unsupported_dtype_backend_wide", 0)),
+    )
+    table.add_row(
+        "unsupported operator (DSL)",
+        str(summary.get("unsupported_operator", 0)),
+    )
     for key, value in summary["fast_p"].items():
         table.add_row(key, f"{value:.3f}")
     table.add_row(

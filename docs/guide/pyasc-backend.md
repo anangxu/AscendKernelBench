@@ -128,3 +128,26 @@ kernel returned correct results for lengths 16384, 1024, 1031, 64, and 1 with
 already passed, so treat that as a simulator exit artifact; and this path
 checks one candidate only. It is not a substitute for evaluation, whose
 reference timing has to be measured live on the device.
+
+## Limitations and how they are reported
+
+Two kinds of limitation are kept apart, because they mean different things for
+coverage:
+
+* **Backend-wide.** pyasc's dtype table has no factory for `bfloat16` or
+  `bool`, so no sample can marshal them at all. The evaluator checks the
+  task's declared dtypes, including the raw inputs before the harness casts a
+  floating tensor to the configured precision, and reports
+  `failure_stage=unsupported_dtype` with `limitation_scope=backend` and the
+  offending `unsupported_dtypes`. The tensor is never converted to a
+  supported dtype: that would score a different task than the reference
+  model defines.
+* **Operator-level.** When the traced body uses something the DSL cannot
+  express, pyasc raises `UnsupportedSyntaxError`, which is reported as
+  `failure_stage=unsupported_operator` with `limitation_scope=operator`.
+
+Neither is a pass. Both stay in the `fast_0` denominator, and
+`summarize_eval_results` carries `unsupported_dtype`,
+`unsupported_dtype_backend_wide`, and `unsupported_operator` counts so the
+report shows the gap instead of letting a success rate hide it. The report
+table prints both rows even when they are zero.
