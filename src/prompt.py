@@ -150,10 +150,14 @@ Output exactly two fenced code blocks, tagged with their filenames:
      across cores;
    - `asc.LocalTensor(dtype, asc.TPosition.VECIN, offset, length)`,
      `asc.data_copy(dst, src, count)`, and vector ops such as
-     `asc.add(dst, a, b, count)`;
+     `asc.add(dst, a, b, count)`. A `data_copy` count is in elements and
+     must cover whole 32-byte blocks; a write-back shorter than 32 bytes
+     silently leaves the destination unchanged;
    - `asc.set_flag(asc.HardEvent.MTE2_V, id)` and
      `asc.wait_flag(asc.HardEvent.MTE2_V, id)` when explicit pipe
-     synchronization is needed, or the TPipe style
+     synchronization is needed, choosing the event that matches the
+     consumer's pipe (MTE2_V before a vector op, MTE2_MTE3 before a
+     write-back copy), or the TPipe style
      (`pipe = asc.TPipe()`, `asc.TQue(asc.TPosition.VECIN, BUFFER_NUM)`,
      `pipe.init_buffer(q, BUFFER_NUM, length * dtype.sizeof())`,
      `q.alloc_tensor(dtype)`, `q.enque(t)`, `q.deque(dtype)`,

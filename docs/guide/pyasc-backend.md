@@ -52,8 +52,8 @@ backend, so a run cannot be evaluated as the wrong language by accident.
 `kernel.py` holds one or more device kernels decorated `@asc.jit` plus a plain
 Python host launcher. `model_new.py` defines `class ModelNew` with the
 reference `Model`'s `__init__` and `forward` signatures and calls that
-launcher. The prompt contract and a verified one-shot example live in
-`src/prompt.py` and `src/prompts/examples/pyasc/`.
+launcher. The prompt contract lives in `src/prompt.py` and the device-verified
+examples in `src/prompts/examples/pyasc/` (element-wise add and row-wise sum).
 
 Kernel semantics that the prompt, the checks, and the evaluator all rely on:
 
@@ -64,10 +64,38 @@ Kernel semantics that the prompt, the checks, and the evaluator all rely on:
   and `core_num=`/`stream=` call keywords are not supported by pyasc 1.1.1.
 * Tensor arguments are annotated `asc.GlobalAddress` and devices see no shapes,
   so sizes travel as scalars or `asc.ConstExpr[int]` compile-time constants.
-* `data_copy` counts must be 32-byte aligned; a 4-byte tail silently computes
-  wrong values. Compute an aligned tiling plan on the host, and pad when the
-  shape cannot be aligned.
+* `data_copy` moves whole 32-byte blocks. A count smaller than one block
+  never reaches memory: measured on an Ascend 910B4 with pyasc 1.1.1, writing
+  back 1 or 4 fp32 (4 / 16 bytes) left the destination at its previous value,
+  while 8 and 16 fp32 (32 / 64 bytes) landed exactly, in both the TQue and
+  the explicit `LocalTensor` styles. Counts that are not multiples of one
+  block silently compute wrong values in the tail. Compute an aligned tiling
+  plan on the host, pad when the shape cannot be aligned, and keep every final
+  write-back at 32 bytes or more.
 * `torch.bfloat16` and `torch.bool` are rejected by pyasc's dtype table.
+
+## Verified device semantics
+
+These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
+2.10.0), not read off the docstrings:
+
+* `asc.whole_reduce_sum(dst, src, mask=..., repeat_time=..., dst_rep_stride=...,
+  src_blk_stride=..., src_rep_stride=...)` reduces **per repeat**, so
+  `repeat_time=R` yields `R` outputs rather than one scalar. In the contiguous
+  mask mode `mask` is an **element count**, not a bit mask. `src_rep_stride`
+  counts 32-byte data blocks of the source, while `dst_rep_stride` counts
+  destination elements. A row-wise fp32 sum (64 columns per repeat) matched
+  `torch.sum(dim=-1)` with `max_abs_diff = 0` on 4 and 8 cores; keep a real
+  tolerance anyway, because pairwise tree accumulation need not agree with
+  torch bit for bit at other sizes.
+* `asc.LocalTensor(dtype, pos, addr, length)` only emits an address, it does
+  not reserve UB. A static-tensor kernel has to reserve it through
+  `asc.LocalMemAllocator().alloc(pos, dtype, tile_size)`, and that style must
+  not be mixed with TPipe/TQue.
+* A GM-to-UB copy followed by a UB-to-GM copy needs an event that matches the
+  consumer's pipe: `asc.HardEvent.MTE2_MTE3`. Waiting on `MTE2_V` instead let
+  the write-back read uninitialised UB. The TQue style handles this
+  internally and is the recommended idiom for generated kernels.
 
 ## Evaluation semantics
 
@@ -139,14 +167,22 @@ coverage:
   task's declared dtypes, including the raw inputs before the harness casts a
   floating tensor to the configured precision, and reports
   `failure_stage=unsupported_dtype` with `limitation_scope=backend` and the
-  offending `unsupported_dtypes`. The tensor is never converted to a
-  supported dtype: that would score a different task than the reference
-  model defines.
-* **Operator-level.** When the traced body uses something the DSL cannot
-  express, pyasc raises `UnsupportedSyntaxError`, which is reported as
-  `failure_stage=unsupported_operator` with `limitation_scope=operator`.
+  offending `unsupported_dtypes`. Unsupported inputs are rejected **before**
+  any cast: converting them would score a different task than the reference
+  model defines. Supported floating types are still cast to the configured
+  precision, exactly as before, so this is not a blanket "no conversion" rule.
+* **Code generation.** `UnsupportedSyntaxError` means the traced body used
+  something this codegen rejects. That is attributable to the generated
+  source, and it may equally be a DSL syntax mistake in that source, so it is
+  reported as `failure_stage=codegen_error` with `limitation_scope=code`
+  rather than as an operator-capability gap.
+* **Operator-level.** `failure_stage=unsupported_operator` with
+  `limitation_scope=operator` is reserved for a limitation that is positively
+  tied to one interface or operator, such as a dtype or shape combination an
+  API does not implement. No exception class is mapped to it automatically;
+  its counter stays zero until such a case is identified by hand.
 
-Neither is a pass. Both stay in the `fast_0` denominator, and
+None of these is a pass. All stay in the `fast_0` denominator, and
 `summarize_eval_results` carries `unsupported_dtype`,
 `unsupported_dtype_backend_wide`, and `unsupported_operator` counts so the
 report shows the gap instead of letting a success rate hide it. The report

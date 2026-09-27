@@ -658,7 +658,10 @@ def test_prompts_and_cli() -> None:
         "002_leaky_relu",
     ], [item.name for item in asc_examples]
     assert all(item.kernel_tag == "custom_op.asc" for item in asc_examples)
-    assert [item.name for item in pyasc_examples] == ["001_elementwise_add"]
+    assert [item.name for item in pyasc_examples] == [
+        "001_elementwise_add",
+        "003_rowsum",
+    ], [item.name for item in pyasc_examples]
     assert pyasc_examples[0].kernel_tag == "kernel.py"
     assert "asc.jit" in pyasc_examples[0].kernel_src
     assert "class ModelNew" in pyasc_examples[0].model_new_py
@@ -666,6 +669,12 @@ def test_prompts_and_cli() -> None:
     # platform: the evaluator owns platform and device selection.
     assert "add_kernel[cores, rt.current_stream()]" in pyasc_examples[0].kernel_src
     assert "set_platform" not in pyasc_examples[0].kernel_src
+    # The reduction example must teach the device-verified call shape.
+    rowsum = pyasc_examples[1]
+    assert rowsum.kernel_tag == "kernel.py"
+    assert "whole_reduce_sum" in rowsum.kernel_src
+    assert "rowsum_kernel[cores, rt.current_stream()]" in rowsum.kernel_src
+    assert "set_platform" not in rowsum.kernel_src
     # The prompt mentions set_platform only to forbid it.
     assert "must not call" in pyasc_prompt
     assert "set_platform" in pyasc_prompt
