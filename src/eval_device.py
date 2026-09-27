@@ -327,19 +327,28 @@ class SampleEvaluator:
         seed_torch(self.req.seed)
         try:
             raw_inputs = self.get_inputs()
-            inputs = [self._process_input(item) for item in raw_inputs]
         except Exception as exc:
             return fail_result(
                 compilation_error=f"input preparation failed: {exc!r}",
                 failure_stage="execution",
                 backend=backend,
             )
-        # Check the raw inputs first: move_value_to_device casts every
-        # floating tensor to the configured precision, which would hide a
-        # task whose declared dtype pyasc cannot marshal.
-        unsupported = self._unsupported_pyasc_dtypes(
-            [*raw_inputs, *inputs]
-        )
+        # Reject before anything casts: move_value_to_device turns every
+        # floating tensor into the configured precision, which would hide a
+        # task whose declared dtype pyasc cannot marshal. Nothing is converted
+        # while this is unresolved, so the rejection is genuinely pre-cast.
+        unsupported = self._unsupported_pyasc_dtypes(raw_inputs)
+        if not unsupported:
+            try:
+                inputs = [self._process_input(item) for item in raw_inputs]
+            except Exception as exc:
+                return fail_result(
+                    compilation_error=f"input preparation failed: {exc!r}",
+                    failure_stage="execution",
+                    backend=backend,
+                )
+            # Backstop on the tensors the kernel is actually handed.
+            unsupported = self._unsupported_pyasc_dtypes(inputs)
         if unsupported:
             return fail_result(
                 compilation_error=(

@@ -304,19 +304,27 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
         ev = SampleEvaluator(make_request(Path(tempfile.mkdtemp()), "pyasc"))
         ev.torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None))
         ev.get_inputs = lambda: [FakeTensor(dtype)]
-        ev._process_input = lambda value: value
+        # Stand in for move_value_to_device: record every cast so a rejection
+        # that happens after the cast cannot pass as pre-cast.
+        cast = {"n": 0}
+
+        def process(value: object) -> object:
+            cast["n"] += 1
+            return value
+
+        ev._process_input = process
         called = {"n": 0}
 
         def model(*args: object) -> None:
             called["n"] += 1
 
         ev.new_model = model
-        return ev, called
+        return ev, called, cast
 
     original_seed = eval_device.seed_torch
     eval_device.seed_torch = lambda value: None
     try:
-        ev, called = evaluator_for("torch.bfloat16")
+        ev, called, cast = evaluator_for("torch.bfloat16")
         result = ev._warm_up_pyasc()
         assert result is not None
         metadata = result["metadata"]
@@ -337,8 +345,13 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
             repr(metadata.get("unsupported_dtypes")),
         )
         check("bf16 never reaches the kernel", called["n"] == 0, repr(called))
+        check(
+            "bf16 is rejected before any input is cast",
+            cast["n"] == 0,
+            f"move_value_to_device ran {cast['n']} time(s) first",
+        )
 
-        ev_ok, _ = evaluator_for("torch.float32")
+        ev_ok, _, cast_ok = evaluator_for("torch.float32")
         ev_ok.new_model = lambda *args: None
         ev_ok._construct_models = lambda: None
         result_ok = ev_ok._warm_up_pyasc()
@@ -346,6 +359,11 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
             "fp32 is not classified as unsupported",
             result_ok is None
             or result_ok["metadata"].get("failure_stage") != "unsupported_dtype",
+        )
+        check(
+            "fp32 still goes through the cast path",
+            cast_ok["n"] > 0,
+            repr(cast_ok),
         )
     finally:
         eval_device.seed_torch = original_seed
