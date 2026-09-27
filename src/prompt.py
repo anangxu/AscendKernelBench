@@ -150,9 +150,9 @@ Output exactly two fenced code blocks, tagged with their filenames:
      across cores;
    - `asc.LocalTensor(dtype, asc.TPosition.VECIN, offset, length)`,
      `asc.data_copy(dst, src, count)`, and vector ops such as
-     `asc.add(dst, a, b, count)`. A `data_copy` count is in elements and
-     must cover whole 32-byte blocks; a write-back shorter than 32 bytes
-     silently leaves the destination unchanged;
+     `asc.add(dst, a, b, count)`. A `data_copy` count is in elements; keep
+     it to whole 32-byte blocks, because a shorter write-back can silently
+     leave the destination unchanged on the target device;
    - `asc.set_flag(asc.HardEvent.MTE2_V, id)` and
      `asc.wait_flag(asc.HardEvent.MTE2_V, id)` when explicit pipe
      synchronization is needed, choosing the event that matches the

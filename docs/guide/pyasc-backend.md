@@ -64,14 +64,15 @@ Kernel semantics that the prompt, the checks, and the evaluator all rely on:
   and `core_num=`/`stream=` call keywords are not supported by pyasc 1.1.1.
 * Tensor arguments are annotated `asc.GlobalAddress` and devices see no shapes,
   so sizes travel as scalars or `asc.ConstExpr[int]` compile-time constants.
-* `data_copy` moves whole 32-byte blocks. A count smaller than one block
-  never reaches memory: measured on an Ascend 910B4 with pyasc 1.1.1, writing
-  back 1 or 4 fp32 (4 / 16 bytes) left the destination at its previous value,
-  while 8 and 16 fp32 (32 / 64 bytes) landed exactly, in both the TQue and
-  the explicit `LocalTensor` styles. Counts that are not multiples of one
-  block silently compute wrong values in the tail. Compute an aligned tiling
-  plan on the host, pad when the shape cannot be aligned, and keep every final
-  write-back at 32 bytes or more.
+* Small `data_copy` write-backs are unreliable on the target tested here. On an
+  Ascend 910B4 with pyasc 1.1.1, a GM write-back of 1 or 4 fp32 (4 / 16 bytes)
+  did not take effect at all and left the destination at its previous value,
+  while 8 and 16 fp32 (32 / 64 bytes) landed exactly, in both the TQue and the
+  explicit `LocalTensor` styles. A tail that is not a whole 32-byte block is
+  unsafe for the same reason. Compute an aligned tiling plan on the host, pad
+  when the shape cannot be aligned, and keep every final write-back at 32 bytes
+  or more. The scope of this measurement is that device, that pyasc version,
+  and that call style; it is not a documented property of `data_copy`.
 * `torch.bfloat16` and `torch.bool` are rejected by pyasc's dtype table.
 
 ## Verified device semantics
@@ -92,10 +93,13 @@ These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
   not reserve UB. A static-tensor kernel has to reserve it through
   `asc.LocalMemAllocator().alloc(pos, dtype, tile_size)`, and that style must
   not be mixed with TPipe/TQue.
-* A GM-to-UB copy followed by a UB-to-GM copy needs an event that matches the
-  consumer's pipe: `asc.HardEvent.MTE2_MTE3`. Waiting on `MTE2_V` instead let
-  the write-back read uninitialised UB. The TQue style handles this
-  internally and is the recommended idiom for generated kernels.
+* In the explicit-address style, a GM-to-UB copy followed by a UB-to-GM copy
+  needs an event that matches the consumer's pipe: `asc.HardEvent.MTE2_MTE3`.
+  Holding the tile length and the addresses fixed and changing only that event
+  from `MTE2_V` to `MTE2_MTE3` turned a write-back of uninitialised UB into an
+  exact one, so do not synchronise a copy against the vector pipe. The TQue
+  style handles this internally and is the recommended idiom for generated
+  kernels.
 
 ## Evaluation semantics
 
