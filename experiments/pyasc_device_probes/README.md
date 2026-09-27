@@ -65,23 +65,25 @@ row of green probes is not a row of correct operators.
 
 ## Known anomaly
 
-A pure copy through a single VECIN queue carries **no MTE2 to MTE3 dependency**:
-the IR handed to the compiler has no sync op in that function, and at 64 KiB the
-idiom alone was wrong in 5 of 5 launches while the same kernel plus an allocated
-`MTE2_MTE3` pair was exact in 10 of 10. The explicit-address path is exact at the
-same sizes. A pre-launch `torch.npu.synchronize()` does not change it, so the
-sentinel blocks are not a late PyTorch fill. A second, smaller manifestation
-(stale or missing data at small write-backs) stays unexplained and parked, and a
-stale value cannot be attributed to UB without a per-repetition marker. Details,
-scope and what was excluded are in
+A copy straight from the inbound buffer to GM through one VECIN queue carries no
+MTE2 to MTE3 dependency: the generated `ascendc.cpp` has no `SetFlag`/`WaitFlag`
+in that function, and the corruption it causes (5 of 5 launches wrong at a 64 KiB
+write-back, 16 of 90 wrong across three small sizes) disappears when the same
+kernel adds an event pair from `pipe.alloc_event_id(HardEvent.MTE2_MTE3)` (0 of
+100 wrong). A late PyTorch fill is not the cause: a pre-launch
+`torch.npu.synchronize()` with the fill proven complete changes nothing. The
+documented `TQueBind`-plus-`init_buffer` form does not dispatch in pyasc 1.1.1,
+so the promised binding path was never exercised and this is not a defect claim.
+Scope, counts, and what is still open are in
 [`docs/reference/pyasc-device-evidence.md`](../../docs/reference/pyasc-device-evidence.md).
 
 ## Bounded contrasts
 
 `_ab_runner.sh` and `_ab_sync_runner.sh` are the A/B harnesses behind the
 anomaly section; `_presync_contrast.py` tests the cross-stream ordering
-explanation, `_tque_event_contrast.py` the missing in-kernel dependency, and
-`_dump_ir.py` dumps the generated IR at both the codegen and compiler stages. They alternate two variants in fresh processes with the input,
+explanation, `_tque_event_contrast.py` the missing in-kernel dependency at large
+sizes, `_small_writeback_runner.sh` the budgeted small-size contrast, and
+`_dump_codegen.py` reads the compiler's own `PYASC_DUMP_PATH` artefacts. They alternate two variants in fresh processes with the input,
 shape, dtype, device, stream, synchronisation, sentinel, working directory and
 cache pinned, and print one `METRICS` line per run. `_ab_entry_b.py` is the
 second entry point, `_ab_sync_variant.py` the two synchronisation variants.

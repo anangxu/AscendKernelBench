@@ -220,6 +220,68 @@ def test_first_call_success_records_seconds_and_rebuilds() -> None:
         check("rebuild replaced the model", evaluator.new_model == "rebuilt")
 
 
+def test_first_call_correctness_is_a_diagnostic() -> None:
+    """The first call's output is recorded, and never fails the sample."""
+    import contextlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        evaluator = SampleEvaluator(make_request(Path(tmp), "pyasc"))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None),
+            no_grad=contextlib.nullcontext,
+        )
+        evaluator.get_inputs = lambda: []
+        evaluator._process_input = lambda value: value
+        evaluator.new_model = lambda *args: "same"
+        evaluator._run_reference = lambda inputs, raw, trial, stage=None: "same"
+        evaluator._outputs_ok = lambda ref, new: ref == new
+
+        def fake_construct() -> None:
+            evaluator.new_model = lambda *args: "same"
+            return None
+
+        evaluator._construct_models = fake_construct
+
+        original_diff = eval_device.max_abs_diff
+        original_seed = eval_device.seed_torch
+        eval_device.max_abs_diff = lambda ref, new: 0.0
+        eval_device.seed_torch = lambda value: None
+        try:
+            result = evaluator._warm_up_pyasc()
+            check("a matching first call still returns None", result is None, repr(result))
+            check(
+                "first_call_correct is recorded as True",
+                evaluator.metadata.get("first_call_correct") is True,
+                repr(evaluator.metadata.get("first_call_correct")),
+            )
+
+            evaluator._outputs_ok = lambda ref, new: False
+            evaluator.metadata = {}
+            result = evaluator._warm_up_pyasc()
+            check(
+                "a wrong first call is recorded, not enforced",
+                result is None and evaluator.metadata.get("first_call_correct") is False,
+                repr((result, evaluator.metadata.get("first_call_correct"))),
+            )
+
+            def explode(*args, **kwargs):
+                raise RuntimeError("reference unavailable")
+
+            evaluator._run_reference = explode
+            evaluator.metadata = {}
+            result = evaluator._warm_up_pyasc()
+            check(
+                "a failed check is recorded as a diagnostic error",
+                result is None
+                and evaluator.metadata.get("first_call_correct") is None
+                and "reference unavailable" in str(evaluator.metadata.get("first_call_check_error")),
+                repr(evaluator.metadata.get("first_call_check_error")),
+            )
+        finally:
+            eval_device.max_abs_diff = original_diff
+            eval_device.seed_torch = original_seed
+
+
 def test_pyasc_timing_validation() -> None:
     """The event-versus-wall cross-check gates the reported speedup."""
     import time as _time
@@ -421,6 +483,7 @@ def main() -> int:
     try:
         test_first_call_failure_is_a_jit_failure()
         test_first_call_success_records_seconds_and_rebuilds()
+        test_first_call_correctness_is_a_diagnostic()
     finally:
         eval_device.seed_torch = original_seed
     test_ascendc_build_path_untouched()

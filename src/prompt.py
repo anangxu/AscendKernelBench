@@ -153,9 +153,14 @@ Output exactly two fenced code blocks, tagged with their filenames:
      `asc.add(dst, a, b, count)`. A `data_copy` count is in elements; keep
      it to whole 32-byte blocks, because a shorter write-back can silently
      leave the destination unchanged on the target device;
-   - a kernel whose only work is a copy must wait for its own inbound copy
-     before writing back (`pipe.alloc_event_id(asc.HardEvent.MTE2_MTE3)` for the
-     id); a single queue carries no such dependency;
+   - every data path needs the dependency its consumer requires; the queue
+     alone does not supply it. A copy straight from the inbound buffer to GM
+     needs `asc.HardEvent.MTE2_MTE3`; a vector operation consuming the inbound
+     buffer needs `MTE2_V` and the write-back of its result needs `V_MTE3`; a
+     loop that reuses one buffer also has to keep the previous reader finished
+     before the buffer is overwritten. Take the event id from
+     `pipe.alloc_event_id(<event>)` rather than a literal, and do not add
+     `MTE2_MTE3` in front of a write-back whose producer is the vector unit;
    - `asc.set_flag(asc.HardEvent.MTE2_V, id)` and
      `asc.wait_flag(asc.HardEvent.MTE2_V, id)` when explicit pipe
      synchronization is needed, choosing the event that matches the
@@ -164,7 +169,9 @@ Output exactly two fenced code blocks, tagged with their filenames:
      (`pipe = asc.TPipe()`, `asc.TQue(asc.TPosition.VECIN, BUFFER_NUM)`,
      `pipe.init_buffer(q, BUFFER_NUM, length * dtype.sizeof())`,
      `q.alloc_tensor(dtype)`, `q.enque(t)`, `q.deque(dtype)`,
-     `q.free_tensor(t)`).
+     `q.free_tensor(t)`). The TQue idiom was measured exact when a vector
+     operation sits between the copies, so prefer that shape over a bare
+     copy through one queue.
    The dtype comes from the tensor annotation (`x.dtype`) and
    `dtype.sizeof()` gives its element size. A helper kernel may itself be
    decorated with `@asc.jit`.

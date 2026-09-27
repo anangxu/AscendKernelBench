@@ -361,7 +361,7 @@ class SampleEvaluator:
                 backend=backend,
             )
         try:
-            seconds, _ = time_first_call(lambda: self.new_model(*inputs))
+            seconds, first_out = time_first_call(lambda: self.new_model(*inputs))
             self.torch.npu.synchronize()
         except PyAscJITError as exc:
             stage, scope = _pyasc_failure_kind(exc)
@@ -379,6 +379,9 @@ class SampleEvaluator:
                 backend=backend,
             )
         self.metadata["first_call_seconds"] = round(seconds, 3)
+        # Diagnostic only: a first call can succeed and still produce wrong
+        # output, which the compiled flag cannot express. Never fails a sample.
+        self._record_first_call_correctness(first_out, inputs, raw_inputs)
         self.metadata.update(runtime_facts(self.sample_path))
         # Rebuild so the warm-up call cannot influence measured behaviour.
         self.new_model = None
@@ -593,6 +596,34 @@ class SampleEvaluator:
             )
         self.last_new_out = new_out
         return None
+
+    def _record_first_call_correctness(
+        self,
+        first_out: Any,
+        inputs: Sequence[Any],
+        raw_inputs: Sequence[Any],
+    ) -> None:
+        """Record whether the warm-up call's output matched, as a diagnostic.
+
+        The warm-up call already decides whether the sample compiled. This adds
+        the separate question of whether that first output was right, which
+        matters when a backend can lose synchronisation on a first call. It is
+        recorded, never enforced: the scored protocol stays the correctness
+        trials. Any failure here is recorded as a diagnostic error.
+        """
+        if first_out is None:
+            self.metadata["first_call_correct"] = None
+            self.metadata["first_call_check_error"] = "first call returned no output"
+            return
+        try:
+            with self.torch.no_grad():
+                ref_out = self._run_reference(inputs, raw_inputs, 0, stage="first call")
+                self.torch.npu.synchronize(device=self.req.device)
+            self.metadata["first_call_correct"] = self._outputs_ok(ref_out, first_out)
+            self.metadata["first_call_max_difference"] = max_abs_diff(ref_out, first_out)
+        except Exception as exc:
+            self.metadata["first_call_correct"] = None
+            self.metadata["first_call_check_error"] = repr(exc)
 
     ################################# TRIALS #################################
 

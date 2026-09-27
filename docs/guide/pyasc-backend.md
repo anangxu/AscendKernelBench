@@ -103,14 +103,19 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   exact one, so do not synchronise a copy against the vector pipe. The TQue
   style handles this internally and is the recommended idiom for generated
   kernels.
-* A kernel whose only work is a copy must order its inbound copy against its
-  write-back by hand. Through one VECIN queue the generated code carried no
-  `set_flag`/`wait_flag` at all, and at a 64 KiB write-back the idiom alone was
-  wrong in 5 of 5 launches while the same kernel plus an
-  `asc.HardEvent.MTE2_MTE3` pair from `pipe.alloc_event_id(...)` was exact in 10
-  of 10; explicit addresses with the same pair were exact too. Kernels that keep
-  a vector operation between the copies, as the bundled examples do, were not
-  affected in these tests. Scope and counts:
+* Match the event to the consumer of each data path; a queue does not supply
+  arbitrary dependencies. Measured on the target device: a copy that goes
+  straight from the inbound buffer to GM carries no dependency through one
+  VECIN queue, and at a 64 KiB write-back the idiom alone was wrong in 5 of 5
+  launches while the same kernel plus an `asc.HardEvent.MTE2_MTE3` pair from
+  `pipe.alloc_event_id(...)` was exact in 10 of 10. The generated CCE source,
+  dumped with `PYASC_DUMP_PATH`, contained no `SetFlag`/`WaitFlag` for the bare
+  copy and did contain the pair for the explicit version. Paths that run a
+  vector operation between the copies were not affected in these tests, but
+  that is not a licence to insert an unrelated vector op: a vector-produced
+  result must be waited on with the vector event (`MTE2_V` in, `V_MTE3` out),
+  and a loop that reuses one buffer must also keep the previous reader finished
+  before overwriting it. Scope, counts and the open questions are in
   `docs/reference/pyasc-device-evidence.md`.
 * The bundled reduction example accepts only shapes it addresses exactly: cols
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
