@@ -29,7 +29,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, run, setup_device
 
 COLS = 64
 REPEATS = 16
@@ -113,7 +113,7 @@ def body() -> None:
     torch.npu.synchronize()
     got = [round(v, 3) for v in y.cpu().tolist()]
     print(f"     control got={got}")
-    expect(
+    check(
         "the 64-byte write-back is exact",
         got == [float(i) for i in range(REPEATS)],
         f"got={got}",
@@ -127,7 +127,7 @@ def body() -> None:
     want = [float(r * 64000 + 2016) for r in range(REPEATS)]
     print(f"     reduce  got={got2}")
     print(f"     want       ={want}")
-    expect("whole_reduce_sum matches the closed form exactly", got2 == want)
+    check("whole_reduce_sum matches the closed form exactly", got2 == want)
 
 if __name__ == "__main__":
     raise SystemExit(run("R7 reduce with adequate write-back", body))

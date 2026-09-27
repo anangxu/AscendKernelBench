@@ -103,6 +103,12 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   exact one, so do not synchronise a copy against the vector pipe. The TQue
   style handles this internally and is the recommended idiom for generated
   kernels.
+* A TQue write-back of about 16 KiB or more dropped whole output chunks on the
+  device these facts were measured on, while the same sizes through explicit
+  addresses with `MTE2_MTE3` were exact. The bundled example's 2 KiB write-back
+  was exact in ten runs at its own shape. Keep TQue write-backs small, or use
+  the explicit-address path for large ones, and re-measure before relying on
+  either: `docs/reference/pyasc-device-evidence.md` has the counts and the scope.
 * The bundled reduction example accepts only shapes it addresses exactly: cols
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
   8-row blocks per core. It raises ValueError otherwise, because a column count

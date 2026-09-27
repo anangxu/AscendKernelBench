@@ -15,7 +15,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, report_metrics, run, setup_device
 
 N = 64
 
@@ -48,8 +48,9 @@ def body() -> None:
     torch.npu.synchronize()
     got = y.cpu()
 
-    expect("round trip overwrites the sentinel", not bool((got == -1.0).all()))
-    expect("round trip is bit exact", bool(torch.equal(got, x_cpu)), f"got[:6]={got[:6].tolist()}")
+    report_metrics("A", got, x_cpu)
+    check("round trip overwrites the sentinel", not bool((got == -1.0).all()))
+    check("round trip is bit exact", bool(torch.equal(got, x_cpu)), f"got[:6]={got[:6].tolist()}")
 
 if __name__ == "__main__":
     raise SystemExit(run("TQue copy round trip", body))

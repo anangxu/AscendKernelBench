@@ -21,7 +21,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import reproduced, run, setup_device
 
 COLS = 64
 REPEATS = 4
@@ -69,7 +69,7 @@ def body() -> None:
 
     got = [round(v, 3) for v in y.cpu().tolist()]
     print(f"     got = {got}")
-    expect("the sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
+    reproduced("the sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
 
 if __name__ == "__main__":
     raise SystemExit(run("R3 R2 plus sync", body))

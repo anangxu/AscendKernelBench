@@ -31,7 +31,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, run, setup_device
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_DIR = REPO_ROOT / "src" / "prompts" / "examples" / "pyasc" / "003_rowsum"
@@ -51,7 +51,7 @@ def body() -> None:
         out = kernel.rowsum_launch(x)
         want = torch.sum(x, dim=-1)
         diff = (out - want).abs().max().item()
-        expect(
+        check(
             f"rows={rows} cols={cols} matches torch.sum(dim=-1)",
             bool(torch.allclose(out, want, atol=1e-4, rtol=1e-4)),
             f"cores={kernel.pick_cores(rows)} max_abs_diff={diff:.3g}",
@@ -60,9 +60,9 @@ def body() -> None:
     for rows, cols in REFUSED:
         try:
             kernel.rowsum_launch(torch.rand(rows, cols, dtype=torch.float32, device="npu"))
-            expect(f"rows={rows} cols={cols} is refused", False, "accepted instead")
+            check(f"rows={rows} cols={cols} is refused", False, "accepted instead")
         except ValueError as exc:
-            expect(f"rows={rows} cols={cols} is refused", True, str(exc))
+            check(f"rows={rows} cols={cols} is refused", True, str(exc))
 
     rows, cols = 64, 12
     x = torch.rand(rows, cols, dtype=torch.float32, device="npu")
@@ -71,7 +71,7 @@ def body() -> None:
     torch.npu.synchronize()
     want = torch.sum(x, dim=-1)
     diff = (out - want).abs().max().item()
-    expect(
+    check(
         "cols=12 called directly does not match (the guard is not cosmetic)",
         not bool(torch.allclose(out, want, atol=1e-4, rtol=1e-4)),
         f"max_abs_diff={diff:.3g}",

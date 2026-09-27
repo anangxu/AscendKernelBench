@@ -21,7 +21,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, run, setup_device
 
 N = 64
 
@@ -82,13 +82,13 @@ def body() -> None:
             print(f"     {str(dtype):16s} {type(exc).__name__}: {str(exc)[:90]}")
             return exc
 
-    expect("float32 launches with pyasc alone", attempt(torch.float32) is None)
+    check("float32 launches with pyasc alone", attempt(torch.float32) is None)
 
     for dtype in (torch.bfloat16, torch.bool):
         exc = attempt(dtype)
         name = str(dtype).split(".")[-1]
         message = "" if exc is None else str(exc)
-        expect(
+        check(
             f"pyasc rejects {name} on its own",
             exc is not None and "Unsupported DataType name" in message and name in message,
             f"{type(exc).__name__ if exc else 'no error'}: {message[:80]}",

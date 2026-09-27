@@ -19,7 +19,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import reproduced, run, setup_device
 
 COLS = 64
 REPEATS = 4
@@ -95,7 +95,7 @@ def body() -> None:
     torch.npu.synchronize()
     got = [round(v, 3) for v in y.cpu().tolist()]
     print(f"     R5a copy+alloc   got={got}")
-    expect("R5a sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
+    reproduced("R5a sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
 
     y2 = torch.full((REPEATS,), -1.0, dtype=torch.float32, device="npu")
     reduce_with_alloc[1, stream](x, y2, REPEATS, COLS)
@@ -103,7 +103,7 @@ def body() -> None:
     torch.npu.synchronize()
     got2 = [round(v, 3) for v in y2.cpu().tolist()]
     print(f"     R5b reduce+alloc got={got2}")
-    expect("R5b sentinel survives", got2 == [-1.0] * REPEATS, f"got={got2}")
+    reproduced("R5b sentinel survives", got2 == [-1.0] * REPEATS, f"got={got2}")
 
 if __name__ == "__main__":
     raise SystemExit(run("R5 UB reservation", body))

@@ -27,7 +27,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, reproduced, run, setup_device
 
 COLS = 64
 REPEATS = 4
@@ -75,9 +75,9 @@ def body() -> None:
     print(f"     got        = {got}")
     print(f"     contiguous = {contiguous}")
     print(f"     bitmask    = {bitmask}")
-    expect("contiguous-mask expectation is not met", got != [float(v) for v in contiguous])
-    expect("per-bit-mask expectation is not met", got != [float(v) for v in bitmask])
-    expect(
+    reproduced("contiguous-mask expectation is not met", got != [float(v) for v in contiguous])
+    reproduced("per-bit-mask expectation is not met", got != [float(v) for v in bitmask])
+    check(
         "the zero-initialised buffer leaves the write ambiguous",
         all(v == 0.0 for v in got),
         "an all-zero result is consistent with both 'wrote 0' and 'wrote nothing'",

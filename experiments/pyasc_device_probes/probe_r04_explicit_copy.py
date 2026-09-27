@@ -27,7 +27,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import reproduced, run, setup_device
 
 COLS = 64
 REPEATS = 4
@@ -83,7 +83,7 @@ def body() -> None:
     torch.npu.synchronize()
     got = [round(v, 3) for v in y.cpu().tolist()]
     print(f"     R4  dst=VECOUT@1024 got={got}")
-    expect("R4 sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
+    reproduced("R4 sentinel survives", got == [-1.0] * REPEATS, f"got={got}")
 
     y2 = torch.full((REPEATS,), -1.0, dtype=torch.float32, device="npu")
     copy_via_vecin[1, stream](x, y2, REPEATS, COLS)
@@ -91,7 +91,7 @@ def body() -> None:
     torch.npu.synchronize()
     got2 = [round(v, 3) for v in y2.cpu().tolist()]
     print(f"     R4s src=VECIN@0     got={got2} (expected [0, 1, 2, 3] if the move worked)")
-    expect("R4s sentinel survives", got2 == [-1.0] * REPEATS, f"got={got2}")
+    reproduced("R4s sentinel survives", got2 == [-1.0] * REPEATS, f"got={got2}")
 
 if __name__ == "__main__":
     raise SystemExit(run("R4 explicit-address copy", body))

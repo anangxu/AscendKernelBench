@@ -55,11 +55,29 @@ Probes that document a historical failure assert the **observation** (for
 example "the sentinel survived"), not correctness, so a green verdict means the
 finding reproduced. Their docstrings state which variable each one changes.
 
-**Known anomaly.** On a rebuilt container the TQue copy path wrote stale, zero,
-or garbage data in some sessions and was exact in others: `probe_s1` failed
-10/10 in one shell loop and the same kernel passed 9/9 standalone in another,
-while `whole_reduce_sum` matched the closed form every time. A fresh
-`PYASC_CACHE_DIR` reproduced both outcomes, so the cache is not the cause. Until
-it is resolved, treat the TQue copy round trip as conditional on the session.
-The counts and what was ruled out are in
+## Verdict vocabulary
+
+`PASS`/`FAIL` is a correctness requirement. `EXPECTED_FAILURE_REPRODUCED` means a
+known failure still happens, which is what the probes for R1 to R6, R9's
+"does not take effect" cases and R10's `MTE2_V` case report. The summary counts
+the two apart and prints "a reproduced failure is not a correctness pass", so a
+row of green probes is not a row of correct operators.
+
+## Known anomaly
+
+The TQue copy path has two failure modes on the container these records were
+re-measured on. A write-back of about 16 KiB or more drops whole chunks
+(provoked: five launches per size, 128 to 1032 elements never written), while the
+same sizes through explicit addresses with `MTE2_MTE3` were exact in fifteen
+launches. A small write-back also reads stale or missing data occasionally; that
+one is unexplained and parked. The bundled example was exact 10/10 at its own
+shape. Counts, what was ruled out, and the next variable are in
 [`docs/reference/pyasc-device-evidence.md`](../../docs/reference/pyasc-device-evidence.md).
+
+## Bounded contrasts
+
+`_ab_runner.sh` and `_ab_sync_runner.sh` are the A/B harnesses behind the
+anomaly section. They alternate two variants in fresh processes with the input,
+shape, dtype, device, stream, synchronisation, sentinel, working directory and
+cache pinned, and print one `METRICS` line per run. `_ab_entry_b.py` is the
+second entry point, `_ab_sync_variant.py` the two synchronisation variants.

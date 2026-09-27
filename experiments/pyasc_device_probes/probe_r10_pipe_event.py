@@ -24,7 +24,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, reproduced, run, setup_device
 
 N = 256
 
@@ -72,9 +72,9 @@ def body() -> None:
         head = [round(v, 3) for v in got[:6].tolist()]
         print(f"     event={event:9s} exact={exact} head={head}")
         if want_exact:
-            expect(f"event {event} copies exactly", exact, f"mismatches={int((got != x_cpu).sum())}")
+            check(f"event {event} copies exactly", exact, f"mismatches={int((got != x_cpu).sum())}")
         else:
-            expect(f"event {event} does not copy exactly", not exact, f"head={head}")
+            reproduced(f"event {event} does not copy exactly", not exact, f"head={head}")
 
 if __name__ == "__main__":
     raise SystemExit(run("R10 pipe event choice", body))

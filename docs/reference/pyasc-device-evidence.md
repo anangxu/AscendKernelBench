@@ -77,47 +77,89 @@ versions below were re-confirmed). Results:
 | `probe_r07_reduce_vs_expected.py` | matched the closed form | **intermittent** control; the reduce matched in every run |
 | `probe_r08_multicore_vs_torch.py` | matched `torch.sum` exactly | **intermittent** (see below) |
 
-## Open anomaly: intermittent wrong write-backs in the TQue style
+## Open anomaly: two TQue copy failure modes
 
-On the rebuilt container the TQue copy path wrote stale, zero, or garbage data
-in some sessions and was exact in others. Counts, from a shell loop of
-standalone runs:
+The TQue copy path produced wrong output in several sessions while the same
+sizes were exact through explicit addresses. Two manifestations were seen, and
+they are recorded separately because they have different evidence.
 
-| Observation | Result |
-| --- | --- |
-| `probe_s1_tque_copy_roundtrip.py`, 10 consecutive runs | 0 pass, 10 fail (zeros, stale values, or garbage) |
-| `probe_r07_reduce_vs_expected.py`, 5 runs | control failed 5/5; `whole_reduce_sum` matched the closed form every time |
-| `probe_r08_multicore_vs_torch.py`, 5 runs | 0 pass, 5 fail, deterministic `max_abs_diff = 38` for rows=128/cores=4 |
-| Same R8 kernel, 4 launches in one process | 4/4 exact |
-| The same copy kernel as a standalone script, 3 processes x 3 launches with different inputs | 9/9 exact, and each launch saw its own input |
-| `probe_s1` with a fresh `PYASC_CACHE_DIR`, 3 runs | fail, fail, pass |
-| Full probe set, two runs | run 1: only R1 red; run 2: R7, R8, S1 red |
+### A. A write-back of roughly 16 KiB or more drops whole chunks
 
-What this rules out, and what it does not:
+Provoked on demand, so this needs counts rather than rate studies. Each line is
+five launches of a copy within one process, reporting how many output elements
+were still holding the sentinel (never written):
 
-* **Not a stale cache.** A fresh cache directory reproduced both outcomes.
-* **Not result reuse within a process.** Every launch saw its own input.
-* **Not the reduce.** `whole_reduce_sum` produced the exact closed form in every
-  run in which it was reached, including runs whose copy control failed.
-* **Not reproducible per kernel.** The same kernel that failed 10/10 as
-  `probe_s1` passed 9/9 as a standalone script.
+| Write-back size | TQue (`enque`/`deque`) missing per launch | Explicit address + `MTE2_MTE3` |
+| --- | --- | --- |
+| 16 KiB | `[0, 0, 1032, 0, 1032]` | `[0, 0, 0, 0, 0]` |
+| 32 KiB | `[256, 256, 0, 256, 0]` | not run |
+| 64 KiB | `[128, 0, 128, 0, 128]` | `[0, 0, 0, 0, 0]` |
+| 128 KiB | `[0, 0, 0, 0, 0]` once, `3072` missing in an earlier single launch | `[0, 0, 0, 0, 0]` |
 
-The engine path was checked on the same container: the harness run of the
-bundled example passed (`pyasc_rowsum`, `pyasc_add`, `pyasc_relu` all
-`compiled=True, correctness=True`).
+The lost elements are contiguous chunks that never get written, and the loss is
+not deterministic per launch. The explicit-address path was exact in all fifteen
+launches at the same sizes, with the same input, dtype, device, stream and
+sentinel, so the buffer-management style is the variable, not `data_copy` and
+not the size on its own.
 
-**Unresolved.** Whether this is a timing-sensitive defect in pyasc's TQue
-handling, an artifact of this container's device state, or something about how
-the probe modules are invoked is not determined, and this page does not claim
-pyasc is defective. Until it is resolved, treat the TQue copy round trip and the
-exactness of small TQue write-backs as conditional on the session, not as
-settled facts. The reduction results in R7/R8 that matter to the engine (the
-per-repeat semantics, the mask and stride semantics) still reproduced.
+The bundled example `003_rowsum` was then run ten times at its own shape
+(512x64, a 2 KiB write-back) through its own launcher: 10/10 exact, no sentinel
+left. Its write-back sits below the size class that dropped chunks; that is a
+statement about this shape, not a guarantee for other shapes.
 
-The next step, one variable at a time, is to run `probe_s1` twenty times in one
-shell and the identical kernel standalone twenty times in the same session: if
-the two disagree, the difference is in how the probe is invoked rather than in
-the kernel, and if they agree but both fail, the device state is the variable.
+### B. A small write-back occasionally reads stale or missing data
+
+This is the original observation and it is still unexplained. Across the first
+sessions the following were seen at small sizes (64 to 1024 elements):
+
+* `probe_s1` failed 10 consecutive launches in one shell loop, with zeros, stale
+  values, or garbage; the same kernel passed 9/9 as a standalone script with
+  different inputs, each launch returning its own input.
+* `probe_r08` failed 5/5 with a stable error in one session and passed 4/4 in
+  one process in another.
+* `probe_r07`'s copy control failed while its `whole_reduce_sum` matched the
+  closed form every time.
+* One entry-point run wrote 64 wrong elements with a maximum error of exactly
+  the offset an earlier experiment had used, which is what stale UB content
+  looks like.
+* A priming probe (launch A, then launch B with different values) returned
+  `arange(64)` on its first iteration, which was neither input but the residue
+  of an earlier process. That run followed a killed runner, so it is recorded as
+  a lead, not as clean evidence.
+
+### What the bounded contrasts support
+
+**Entry point.** `_ab_runner.sh` alternated the probe entry (A) and a direct
+entry (B) that imports the same kernel, pins input, shape, dtype, device,
+stream, synchronisation, sentinel, working directory and cache, and runs each in
+a fresh process: A 20/20 exact, B 19/20. One failure in forty does not separate
+the entries, so the entry point is not implicated. This also says nothing about
+the device: two entries behaving alike would not establish the device as the
+cause.
+
+**Synchronisation.** `_ab_sync_runner.sh` contrasted the TQue idiom with the
+same kernel plus an explicit `MTE2_MTE3` pair, and was stopped part way at
+plain 27/27 and event 26/26. That contrast was underpowered by construction: a
+rare event cannot be resolved by running more launches of it. It was abandoned
+in favour of the size provocation above, which reproduces the defect in five
+launches.
+
+**Cache.** A fresh `PYASC_CACHE_DIR` reproduced both outcomes, so changing the
+cache is not sufficient to remove the problem. That is weaker than clearing the
+cache of involvement, which was not tested.
+
+### Status and next variable
+
+Unresolved and parked: manifestation B, and the mechanism behind A (whether the
+queue's buffer accounting, its synchronisation, or its DMA split is at fault).
+Neither is a claim that pyasc is defective, and no rate is quoted for either.
+
+The next variable, if this is picked up again, is the TQue buffer accounting at
+large tiles: hold the kernel and the sizes fixed and change only the queue depth
+and the `init_buffer` byte count (`asc.TQue(pos, 1)` with `n * 4` versus depth 2
+with the matching count), then re-run the five-launch size sweep above. The
+explicit-address path is already exact at these sizes, so it is the reference
+point for what correct looks like.
 
 ## The experiments
 

@@ -25,7 +25,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, reproduced, run, setup_device
 
 COLS = 64
 REPEATS = 4
@@ -103,8 +103,8 @@ def body() -> None:
     got = y.cpu()
     head = [round(v, 3) for v in got[:6].tolist()]
     print(f"     R6a head={head}")
-    expect("R6a writes something", not bool((got == -1.0).all()))
-    expect(
+    check("R6a writes something", not bool((got == -1.0).all()))
+    reproduced(
         "R6a contents are not the input (uninitialised UB)",
         head != [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
         f"head={head}",
@@ -116,7 +116,7 @@ def body() -> None:
     torch.npu.synchronize()
     got2 = [round(v, 3) for v in y2.cpu().tolist()]
     print(f"     R6b got={got2}")
-    expect(
+    reproduced(
         "R6b leaves the sentinel intact (a 16-byte write-back hides the reduce)",
         got2 == [-1.0] * REPEATS,
         f"got={got2}",

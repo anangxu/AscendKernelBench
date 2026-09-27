@@ -27,7 +27,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, run, setup_device
 
 COLS = 64
 
@@ -98,7 +98,7 @@ def body() -> None:
         diff = (out - want).abs().max().item()
         print(f"     rows={rows} cores={cores}: got[:3]={[round(v, 3) for v in out[:3].tolist()]}"
               f" want[:3]={[round(v, 3) for v in want[:3].tolist()]}")
-        expect(
+        check(
             f"rows={rows} cores={cores} matches torch.sum(dim=-1)",
             bool(torch.allclose(out, want, atol=1e-4, rtol=1e-4)),
             f"max_abs_diff={diff:.3g}",
@@ -111,7 +111,7 @@ def body() -> None:
     rt.synchronize()
     torch.npu.synchronize()
     mismatches = int((y.cpu() != flat.cpu()).sum().item())
-    expect("explicit-address full-length copy is bit exact", mismatches == 0, f"mismatches={mismatches}")
+    check("explicit-address full-length copy is bit exact", mismatches == 0, f"mismatches={mismatches}")
 
 if __name__ == "__main__":
     raise SystemExit(run("R8 multi-core row sum", body))

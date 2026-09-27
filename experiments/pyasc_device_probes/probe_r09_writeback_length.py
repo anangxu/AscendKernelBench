@@ -25,7 +25,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import check, reproduced, run, setup_device
 
 N = 1024
 SIZES = (1, 4, 8, 16)
@@ -100,16 +100,16 @@ def body() -> None:
     def fresh() -> dict[int, torch.Tensor]:
         return {k: torch.full((k,), -1.0, dtype=torch.float32, device="npu") for k in SIZES}
 
-    def check(style: str, outs: dict[int, torch.Tensor]) -> None:
+    def grade_style(style: str, outs: dict[int, torch.Tensor]) -> None:
         for size in SIZES:
             got = [round(v, 3) for v in outs[size].cpu().tolist()]
             want = [float(i) for i in range(size)]
             moved = got != [-1.0] * size
             print(f"     {style} k={size:2d} ({size * 4:3d} B): moved={moved} got={got}")
             if size * 4 < 32:
-                expect(f"{style}: a {size * 4}-byte write-back does not take effect", not moved)
+                reproduced(f"{style}: a {size * 4}-byte write-back does not take effect", not moved)
             else:
-                expect(f"{style}: a {size * 4}-byte write-back is exact", got == want, f"got={got}")
+                check(f"{style}: a {size * 4}-byte write-back is exact", got == want, f"got={got}")
 
     x = torch.arange(N, dtype=torch.float32).to("npu")
     stream = rt.current_stream()
@@ -118,13 +118,13 @@ def body() -> None:
     raw_granule[1, stream](x, outs[1], outs[4], outs[8], outs[16], N)
     rt.synchronize()
     torch.npu.synchronize()
-    check("raw ", outs)
+    grade_style("raw ", outs)
 
     outs2 = fresh()
     tque_granule[1, stream](x, outs2[1], outs2[4], outs2[8], outs2[16], N)
     rt.synchronize()
     torch.npu.synchronize()
-    check("tque", outs2)
+    grade_style("tque", outs2)
 
 if __name__ == "__main__":
     raise SystemExit(run("R9 write-back length sweep", body))

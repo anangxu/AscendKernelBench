@@ -31,7 +31,7 @@ import torch_npu  # noqa: F401
 import asc
 import asc.lib.runtime as rt
 
-from _probe_common import expect, run, setup_device
+from _probe_common import reproduced, run, setup_device
 
 COLS = 64
 CORES = 4
@@ -89,7 +89,7 @@ def body() -> None:
     if fault is not None:
         first_line = str(fault).splitlines()[0]
         print(f"     device fault = {type(fault).__name__}: {first_line}")
-        expect(
+        reproduced(
             "the naive kernel faults instead of returning a result",
             True,
             "the same kernel returned wrong values historically; both are failures to compute",
@@ -103,7 +103,7 @@ def body() -> None:
     print(f"     got[:4]        = {head}")
     print(f"     want[:4]       = {[round(v, 4) for v in want[:4].tolist()]}")
     print(f"     identical head = {len(set(head)) == 1}")
-    expect(
+    reproduced(
         "the naive explicit-address row sum does not match torch.sum(dim=-1)",
         not bool(torch.allclose(got, want, atol=1e-4, rtol=1e-4)),
         f"max_abs_diff={diff:.4g}",
