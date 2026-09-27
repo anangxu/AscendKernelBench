@@ -78,7 +78,10 @@ Kernel semantics that the prompt, the checks, and the evaluator all rely on:
 ## Verified device semantics
 
 These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
-2.10.0), not read off the docstrings:
+2.10.0), not read off the docstrings. Versions, inputs, observed outputs, and
+the boundary of each claim are in
+[`docs/reference/pyasc-device-evidence.md`](../reference/pyasc-device-evidence.md),
+and the runnable probes are in `experiments/pyasc_device_probes/`:
 
 * `asc.whole_reduce_sum(dst, src, mask=..., repeat_time=..., dst_rep_stride=...,
   src_blk_stride=..., src_rep_stride=...)` reduces **per repeat**, so
@@ -104,9 +107,10 @@ These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
   8-row blocks per core. It raises ValueError otherwise, because a column count
   that is not a whole block rounds `src_rep_stride` down and silently reduces
-  the wrong elements (measured: cols=12 gives max_abs_diff 4.41 against
-  torch.sum). Every accepted shape was checked against `torch.sum(dim=-1)` and
-  matched exactly.
+  the wrong elements (measured: cols=12 disagrees with torch.sum by order 4;
+  4.41 unseeded historically, 3.9 with the probe's fixed seed). Representative shapes across the accepted range were checked
+  against `torch.sum(dim=-1)` and matched exactly; the range is not exhaustively
+  enumerated.
 
 ## Evaluation semantics
 

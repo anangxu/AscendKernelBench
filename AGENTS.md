@@ -46,6 +46,8 @@ stubs. Unmarked legacy sources still build as a single ASC unit.
 
 Current scope: generation and evaluation CLIs only. There is **no**
 automatic compile-error repair agent and no scheduler / multi-device queue.
+The one thing outside that scope is `experiments/pyasc_device_probes/`, which
+holds device-only evidence scripts and is imported by nothing.
 
 ## Commands
 
@@ -78,6 +80,12 @@ python scripts/generate.py --tasks-file configs/subsets/level1_20.txt \
 ASCEND_RT_VISIBLE_DEVICES=0 python scripts/evaluate.py relu_demo [level]
 python scripts/analyze.py relu_demo
 python scripts/baseline.py --level 1 --hardware ascend910b2 --device npu:0
+
+# Device probes (NPU only; they re-measure the facts in
+# docs/reference/pyasc-device-evidence.md). Standalone: run one, or all.
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cd experiments/pyasc_device_probes && python probe_r09_writeback_length.py
+for probe in probe_*.py; do python "$probe" || exit 1; done
 ```
 
 CLI facts worth remembering:
@@ -116,6 +124,8 @@ CLI facts worth remembering:
 | `.pre-commit-config.yaml` | Optional Ruff and basic file hooks on `src/` and `scripts/`. |
 | `build_template/CMakeLists.txt` | The single build path that produces `libcustom_op.so`. |
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
+| `docs/reference/pyasc-device-evidence.md` | The measured pyasc facts behind the guide, with versions, commands, inputs, observed outputs, and the boundary of each claim. |
+| `experiments/pyasc_device_probes/` | Device-only probes that re-measure those facts. Standalone scripts, not part of `tests/`, imported by nothing in `src/`. |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 
 Module boundaries are strict; `docs/reference/architecture.md` has the full
