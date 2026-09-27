@@ -351,9 +351,9 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
         eval_device.seed_torch = original_seed
 
     check(
-        "UnsupportedSyntaxError is an operator-level limit",
+        "UnsupportedSyntaxError is a codegen error, not a backend limit",
         _pyasc_failure_kind(RuntimeError("x UnsupportedSyntaxError y"))
-        == ("unsupported_operator", "operator"),
+        == ("codegen_error", "code"),
     )
     check(
         "other first-call failures stay jit",

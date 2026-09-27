@@ -90,13 +90,17 @@ PYASC_UNSUPPORTED_DTYPES = frozenset(
 def _pyasc_failure_kind(exc: BaseException) -> tuple[str, str]:
     """Return (failure_stage, limitation_scope) for a first-call failure.
 
-    pyasc raises UnsupportedSyntaxError when the traced body uses something
-    the DSL cannot express, which is an operator-level limit. Anything else
-    stays a plain JIT failure. The class name is read from the wrapped repr
+    UnsupportedSyntaxError means the traced body used something the codegen
+    rejects, which is attributable to the generated source, so it is reported
+    as a codegen error and never as a backend capability limit. Only a
+    positively identified operator-capability limit would use
+    unsupported_operator/operator, and nothing here infers that from an
+    exception: a backend limit is reported by the dtype pre-check, which can
+    name the missing capability. The class name is read from the wrapped repr
     because eval_device imports asc only inside the worker.
     """
     if "UnsupportedSyntaxError" in repr(exc):
-        return "unsupported_operator", "operator"
+        return "codegen_error", "code"
     return "jit", "none"
 
 
