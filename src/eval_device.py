@@ -701,30 +701,39 @@ class SampleEvaluator:
                     (time.perf_counter() - started) * 1000.0 / PYASC_TIMING_WALL_TRIALS
                 )
         except Exception as exc:
-            self.metadata["timing_valid"] = False
-            self.metadata["timing_invalid_reason"] = (
-                f"wall-clock cross-check failed: {exc!r}"
-            )
+            self._discard_timing(f"wall-clock cross-check failed: {exc!r}")
             return
         ratio = self.runtime / wall_ms if wall_ms > 0 else 0.0
         self.metadata["timing_event_ms"] = float(f"{self.runtime:.6g}")
         self.metadata["timing_wall_ms"] = float(f"{wall_ms:.6g}")
         self.metadata["timing_event_wall_ratio"] = float(f"{ratio:.4g}")
         if ratio < PYASC_MIN_EVENT_WALL_RATIO:
-            self.metadata["timing_valid"] = False
-            self.metadata["timing_invalid_reason"] = (
+            self._discard_timing(
                 f"event time {self.runtime:.6g}ms is far below wall time "
                 f"{wall_ms:.6g}ms (ratio {ratio:.3f}); the timed stream does "
                 "not cover the kernel, so no speedup is reported"
             )
-            self.runtime = None
-            self.runtime_stats = None
-            self.ref_runtime = None
-            self.ref_runtime_stats = None
-            self.metadata.pop("speedup", None)
-            self.metadata["excessive_speedup"] = False
             return
         self.metadata["timing_valid"] = True
+
+    def _discard_timing(self, reason: str) -> None:
+        """Drop every timing-derived result so nothing scores an untrusted one.
+
+        Correctness is untouched: the sample still counts in fast_0 and
+        pass@k. What goes is the runtime, the trial statistics, the speedup and
+        the SOL score, because a runtime the event/wall cross-check rejected
+        must not reach a performance threshold or a geometric mean.
+        """
+        self.metadata["timing_valid"] = False
+        self.metadata["timing_invalid_reason"] = reason
+        self.runtime = None
+        self.runtime_stats = None
+        self.ref_runtime = None
+        self.ref_runtime_stats = None
+        self.metadata.pop("speedup", None)
+        self.metadata["excessive_speedup"] = False
+        for key in ("sol_score", "sol_bound_ms", "sol_bound_kind", "bytes_moved"):
+            self.metadata.pop(key, None)
 
     def _time_both_models(self) -> None:
         """Time candidate and NPU reference; attach speedup and SOL metadata."""

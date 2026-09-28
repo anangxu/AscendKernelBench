@@ -107,6 +107,8 @@ def mean_sol_score(samples: Sequence[Mapping[str, object]]) -> float | None:
         metadata = sample.get("metadata") or {}
         if not isinstance(metadata, Mapping):
             continue
+        if metadata.get("timing_valid") is False:
+            continue
         value = metadata.get("sol_score")
         if isinstance(value, (int, float)):
             scores.append(float(value))

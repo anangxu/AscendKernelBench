@@ -336,6 +336,102 @@ def test_pyasc_timing_validation() -> None:
         bool(collapsed.metadata.get("timing_invalid_reason")),
     )
 
+    # The wall-clock cross-check can fail before a ratio exists. That path used
+    # to keep the runtime and the SOL score, so an untrusted measurement stayed
+    # eligible for fast_p, the geometric mean and the SOL average.
+    def explode(*args: object) -> None:
+        raise RuntimeError("wall clock unavailable")
+
+    broken = evaluator_with(2.0, 0.002)
+    broken.new_model = explode
+    broken.metadata = {"speedup": 3.0, "sol_score": 0.9, "sol_bound_ms": 0.01}
+    broken._validate_pyasc_timing()
+    check(
+        "a failed wall-clock check also invalidates timing",
+        broken.metadata.get("timing_valid") is False,
+        repr(broken.metadata.get("timing_valid")),
+    )
+    check("a failed wall-clock check drops the runtime", broken.runtime is None)
+    check(
+        "a failed wall-clock check drops the reference runtime",
+        broken.ref_runtime is None,
+    )
+    check(
+        "a failed wall-clock check drops the speedup",
+        "speedup" not in broken.metadata,
+    )
+    check(
+        "a failed wall-clock check drops the SOL score",
+        "sol_score" not in broken.metadata,
+        repr(broken.metadata.get("sol_score")),
+    )
+
+
+def test_invalid_timing_is_excluded_from_performance() -> None:
+    """A rejected timing keeps correctness credit and loses every perf number."""
+    from src.score import (
+        fast_p,
+        geometric_mean_speedup,
+        sample_speedup,
+        summarize_eval_results,
+    )
+    from src.sol import mean_sol_score
+
+    def sample(valid: bool | None) -> dict:
+        metadata: dict = {}
+        if valid is not None:
+            metadata["timing_valid"] = valid
+        return {
+            "compiled": True,
+            "correctness": True,
+            "runtime": 0.5,
+            "ref_runtime": 5.0,
+            "metadata": {**metadata, "sol_score": 0.8},
+        }
+
+    for label, valid in (("absent", None), ("true", True)):
+        check(
+            f"an {label} timing flag keeps its speedup",
+            sample_speedup(sample(valid)) == 10.0,
+            repr(sample_speedup(sample(valid))),
+        )
+    rejected = sample(False)
+    check("a rejected timing reports no speedup", sample_speedup(rejected) is None)
+    check(
+        "a rejected timing is still counted in fast_0",
+        fast_p([rejected])["fast_0"] == 1.0,
+        repr(fast_p([rejected])["fast_0"]),
+    )
+    check(
+        "a rejected timing is excluded above fast_0",
+        all(
+            value == 0.0
+            for key, value in fast_p([rejected]).items()
+            if key != "fast_0"
+        ),
+        repr(fast_p([rejected])),
+    )
+    check(
+        "a rejected timing is excluded from the geometric mean",
+        geometric_mean_speedup([rejected]) == 0.0,
+    )
+    check(
+        "a rejected timing is excluded from the mean SOL score",
+        mean_sol_score([rejected]) is None,
+        repr(mean_sol_score([rejected])),
+    )
+    summary = summarize_eval_results({"level1/5_x": [rejected]})
+    check(
+        "the summary counts invalid timings",
+        summary.get("timing_invalid") == 1,
+        repr(summary.get("timing_invalid")),
+    )
+    check(
+        "an invalid timing stays in the fast_0 denominator",
+        summary["fast_p"]["fast_0"] == 1.0 and summary["correct"] == 1,
+        repr((summary["fast_p"]["fast_0"], summary["correct"])),
+    )
+
 
 def test_ascendc_build_path_untouched() -> None:
     """The Ascend C branch still reads custom_op.asc as before."""
@@ -488,6 +584,7 @@ def main() -> int:
         eval_device.seed_torch = original_seed
     test_ascendc_build_path_untouched()
     test_pyasc_timing_validation()
+    test_invalid_timing_is_excluded_from_performance()
     test_unsupported_dtype_is_reported_not_casted()
     print()
     if FAILURES:

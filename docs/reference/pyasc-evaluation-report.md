@@ -74,7 +74,54 @@ sample are absent from the denominator rather than counted as failures.
 
 ## Results
 
-<!-- filled in when the run finished -->
+**Batch evaluation paused for this round; results pending.** The reviewer asked
+for the implementation to be reviewed before the full 20x3 run, so generation
+was stopped mid-way and nothing is extrapolated from the partial data.
+
+What exists on disk and is not committed: the run directory with its
+`generation_config.yaml`, the samples that finished generating before the stop,
+and the evaluation results of the one task that was already evaluated. The
+candidates are kept, not deleted, so the run can be resumed without regenerating
+them.
+
+The only measured number this report can state is that one task, and it is
+stated with its history rather than as a score:
+
+| Task | Samples | First evaluation | After the checker fix (same samples, not regenerated) |
+| --- | --- | --- | --- |
+| `level1/5_Matrix_scalar_multiplication` | 3 | 1 compiled, 1 correct | 3 compiled, 3 correct |
+
+That is one task of twenty. `pass@1`, `pass@3`, per-stage failure counts and the
+timing counts are therefore **not reported here**: with a single task they would
+describe the sample, not the backend.
+
+## Completed tests
+
+* `tests/test_generation_backend.py`, `tests/test_eval_backend.py` and
+  `tests/test_checks_backend.py` pass; they need neither a device nor pyasc.
+* The suites pass from a copy of the tree outside the repository, so nothing
+  depends on the author's machine.
+* Ruff, run the way `.pre-commit-config.yaml` runs it
+  (`--select=E,F,W,I` plus `ruff format` on `src/` and `scripts/`), is clean.
+* Both bundled examples pass the pyasc static checks.
+* Device work that is already finished and recorded in
+  `docs/reference/pyasc-device-evidence.md`: the two hand-written samples
+  (element-wise add, row-wise sum) compile and match their references, the
+  reduction semantics were measured, and the dtype rejection was reproduced with
+  the engine's pre-check bypassed.
+
+## Pending verification
+
+* The full 20-task, 3-sample pyasc evaluation, and with it `pass@1`, `pass@3`,
+  per-stage failure counts and how many samples produce timings.
+* Automatic generation quality: everything measured on a device so far is
+  hand-written. This run is the first attempt at measuring what the model
+  writes, and it is incomplete.
+* Real LLM generation of a reduction-style task specifically.
+* The GPU side of the same subset, so the two platforms can be compared.
+* Whether `que_bind` should be lowered into synchronised code inside the pyasc
+  compiler, and whether the documented `TQueBind` plus `init_buffer` form is
+  meant to work in 1.1.1. Recorded as open in the evidence page.
 
 ## Framework fixes the run forced
 
@@ -102,10 +149,15 @@ failed generation was replaced.
 
 ## Known limitations
 
-* The TQue copy dependency described in
-  `docs/reference/pyasc-device-evidence.md` applies here: a kernel whose only
-  work is a copy must order its inbound copy against its write-back itself. The
-  contract tells the model so, and this run shows whether it does.
+* The TQue copy finding in `docs/reference/pyasc-device-evidence.md` is a
+  property of one queue usage, not a pyasc defect: the generated code for a copy
+  that goes straight from the inbound buffer to GM contains no dependency
+  between the two transfers, an allocated `MTE2_MTE3` pair removes the
+  corruption in every comparison, and the documented binding path could not be
+  exercised in 1.1.1. The prompt contract states the dependency each data path
+  needs. `experiments/pyasc_device_probes/` holds the probes that produced this
+  evidence; they are device-only, imported by nothing in `src/`, and useful to
+  anyone re-measuring the same facts.
 * Correctness is judged on one device, one CANN and one pyasc release. Nothing
   here is a cross-platform comparison; the GPU side of the same subset has not
   been run.
