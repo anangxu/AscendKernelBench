@@ -304,12 +304,41 @@ class WrapperSemantics(ast.NodeVisitor):
         self._collect_aliases(tree)
         self.local_funcs = self._collect_scalar_helpers(tree)
         self.defined_names = self._collect_defined_names(tree)
+        # Names defined beside the source and scalar-annotated parameters must
+        # be known before bindings are resolved: a launcher checked in
+        # isolation writes `cores = CORE_LIMIT` or `total: int`, and resolving
+        # those afterwards made legal shape arithmetic look like tensor math.
+        self.scalar_refs |= set(module_scalars or ())
+        self._collect_annotated_scalars(tree)
         for _ in range(3):
             self._collect_bindings(tree)
-        self.scalar_refs |= set(module_scalars or ())
         self.visit(tree)
         if require_sink and not self._reached_sink():
             self.violations.append(self._sink_message())
+
+    def _collect_annotated_scalars(self, tree: ast.Module) -> None:
+        """Add parameters annotated as int, float, or bool to scalar_refs.
+
+        The pyasc contract carries sizes as plain scalars, so `total: int` is
+        shape arithmetic. Unannotated parameters stay unknown: they may be
+        device tensors, and treating them as scalars would let a launcher add
+        tensors without being reported.
+        """
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for arg in [*node.args.args, *node.args.kwonlyargs]:
+                if self._is_scalar_annotation(arg.annotation):
+                    self.scalar_refs.add(arg.arg)
+
+    @staticmethod
+    def _is_scalar_annotation(annotation: ast.AST | None) -> bool:
+        """Return True for an int, float, or bool annotation."""
+        return isinstance(annotation, ast.Name) and annotation.id in {
+            "int",
+            "float",
+            "bool",
+        }
 
     def _collect_scalar_helpers(self, tree: ast.Module) -> set[str]:
         """Return local functions that never touch torch.

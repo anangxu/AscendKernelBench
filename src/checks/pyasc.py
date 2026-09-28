@@ -34,6 +34,7 @@ class KernelFacts:
     jit_functions: dict[str, ast.FunctionDef] = field(default_factory=dict)
     launches: set[str] = field(default_factory=set)
     launchers: dict[str, ast.FunctionDef] = field(default_factory=dict)
+    launcher_entries: dict[str, ast.FunctionDef] = field(default_factory=dict)
     host_functions: dict[str, ast.FunctionDef] = field(default_factory=dict)
     module_scalars: set[str] = field(default_factory=set)
     kernel_modules: set[str] = field(default_factory=set)
@@ -42,7 +43,7 @@ class KernelFacts:
 
     def sink_names(self) -> set[str]:
         """Return every kernel-module attribute a wrapper may call."""
-        return set(self.launchers) | self.imported_kernels
+        return set(self.launcher_entries) | self.imported_kernels
 
 
 def _resolve(node: ast.AST) -> str | None:
@@ -249,8 +250,12 @@ def check_kernel_source(source: str) -> KernelFacts:
     module_names, imported_names = _collect_kernel_imports(tree)
     facts.kernel_modules = module_names
     facts.imported_kernels = imported_names
+    # A kernel or launcher may sit inside a module-level if/try block, and a
+    # launcher may delegate the launch to a helper, so every definition in the
+    # file counts: scanning only tree.body reported legal files as having no
+    # kernel at all.
     module_level = [
-        node for node in tree.body if isinstance(node, ast.FunctionDef)
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
     ]
     facts.module_scalars = _collect_module_scalars(tree)
     for node in module_level:
@@ -302,7 +307,33 @@ def check_kernel_source(source: str) -> KernelFacts:
             "kernel.py has no subscripted launch of a local @asc.jit kernel — "
             "a bare kernel_fn(...) call does not compile or launch"
         )
+    facts.launcher_entries = _reachable_launchers(facts)
     return facts
+
+
+def _reachable_launchers(facts: KernelFacts) -> dict[str, ast.FunctionDef]:
+    """Return the host functions a wrapper may call to reach a launch.
+
+    The prompt lets a launcher delegate the launch to a helper, so the entry
+    point model_new.py calls is not always the function that subscripts the
+    kernel. Grow the set until no further host function calls into it.
+    """
+    entries = dict(facts.launchers)
+    changed = True
+    while changed:
+        changed = False
+        for name, node in facts.host_functions.items():
+            if name in entries:
+                continue
+            called = {
+                call.func.id
+                for call in _iter_calls(node.body)
+                if isinstance(call.func, ast.Name)
+            }
+            if called & set(entries):
+                entries[name] = node
+                changed = True
+    return entries
 
 
 def _module_of(node: ast.FunctionDef) -> ast.Module:
@@ -352,7 +383,7 @@ def check_pyasc_model_new(source: str, facts: KernelFacts) -> list[str]:
     from .python_source import check_model_new
 
     sink = Sink(
-        direct=frozenset(facts.launchers),
+        direct=frozenset(facts.launcher_entries),
         attr_mode=frozenset(facts.kernel_modules),
         kind="kernel",
     )

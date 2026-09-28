@@ -50,6 +50,57 @@ def expect_rejected(label: str, kernel: str, wrapper: str) -> None:
     check(label, bool(found), "no violation reported")
 
 
+# Two legal pyasc shapes that the checks once rejected. Found while evaluating
+# generated samples: a kernel inside a module-level conditional, and a launcher
+# that delegates the launch to a helper while taking int-annotated sizes.
+NESTED_AND_DELEGATED_KERNEL = """\
+import torch
+import torch_npu  # noqa: F401
+
+import asc
+import asc.lib.runtime as rt
+
+BLOCK = 8
+
+
+if hasattr(asc, "mul"):
+
+    @asc.jit
+    def mul_kernel(x: asc.GlobalAddress, y: asc.GlobalAddress, n: asc.ConstExpr[int]):
+        x_gm = asc.GlobalTensor()
+        y_gm = asc.GlobalTensor()
+        x_gm.set_global_buffer(x, n)
+        y_gm.set_global_buffer(y, n)
+        pipe = asc.TPipe()
+        q = asc.TQue(asc.TPosition.VECIN, 1)
+        pipe.init_buffer(q, 1, n * 4)
+        t = q.alloc_tensor(asc.float32)
+        asc.data_copy(t, x_gm, n)
+        q.enque(t)
+        out = q.deque(asc.float32)
+        asc.data_copy(y_gm, out, n)
+        q.free_tensor(out)
+
+
+def _launch(x, z, total: int) -> None:
+    block = total // BLOCK
+    mul_kernel[1, rt.current_stream()](x, z, block)
+
+
+def mul_launch(x: torch.Tensor, z: torch.Tensor) -> None:
+    _launch(x, z, x.numel())
+"""
+
+NESTED_AND_DELEGATED_WRAPPER = """\
+import kernel
+
+
+class ModelNew(torch.nn.Module):
+    def forward(self, A: torch.Tensor, B: torch.Tensor) -> None:
+        return kernel.mul_launch(A, B)
+"""
+
+
 def main() -> int:
     asc = (ROOT / "src/prompts/examples/001_elementwise_add/custom_op.asc").read_text()
     asc_wrapper = (
@@ -92,6 +143,26 @@ def main() -> int:
         "no @asc.jit device function",
         add_kernel.replace("@asc.jit\n", ""),
         add_wrapper,
+    )
+    expect_clean(
+        "kernel inside a module-level conditional is accepted",
+        Backend.PYASC,
+        NESTED_AND_DELEGATED_KERNEL,
+        NESTED_AND_DELEGATED_WRAPPER,
+    )
+    expect_clean(
+        "launcher delegating the launch to a helper is accepted",
+        Backend.PYASC,
+        NESTED_AND_DELEGATED_KERNEL,
+        NESTED_AND_DELEGATED_WRAPPER,
+    )
+    expect_rejected(
+        "tensor arithmetic on an unannotated launcher parameter is still rejected",
+        NESTED_AND_DELEGATED_KERNEL.replace(
+            "def _launch(x, z, total: int) -> None:",
+            "def _launch(x, z, total) -> None:",
+        ),
+        NESTED_AND_DELEGATED_WRAPPER,
     )
     expect_rejected("wrapper without ModelNew", add_kernel, "import torch\n")
     expect_rejected(
