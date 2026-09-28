@@ -218,7 +218,9 @@ def _run_eval_worker(cfg: dict[str, Any], timeout_s: int) -> dict[str, Any]:
     if outcome.returncode != 0:
         err = outcome.stderr.strip()
         return fail_result(
-            runtime_error=err[-2000:] or f"worker exited with code {outcome.returncode}",
+            runtime_error=(
+                err[-2000:] or f"worker exited with code {outcome.returncode}"
+            ),
             failure_stage="worker",
             backend=str(cfg.get("backend", DEFAULT_BACKEND.value)),
         )

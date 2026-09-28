@@ -18,9 +18,7 @@ sys.path.insert(0, str(ROOT))
 from src.backend import Backend  # noqa: E402
 from src.checker import check_sample_sources  # noqa: E402
 
-FIXTURES = Path(
-    "/Users/anangxu/文件/论文/local_pass10_20260909/pyasc_fixtures/harness"
-)
+FIXTURES = ROOT / "tests" / "fixtures" / "pyasc"
 FAILURES: list[str] = []
 
 
@@ -108,10 +106,10 @@ def main() -> int:
     ).read_text()
     expect_clean("ascendc official example stays clean", Backend.ASCENDC, asc, asc_wrapper)
 
-    add_kernel = (FIXTURES / "runs_pyasc_add/level1/901_add_smoke/sample_0/kernel.py").read_text()
-    add_wrapper = (FIXTURES / "runs_pyasc_add/level1/901_add_smoke/sample_0/model_new.py").read_text()
-    relu_kernel = (FIXTURES / "runs_pyasc_relu/level1/902_relu_smoke/sample_0/kernel.py").read_text()
-    relu_wrapper = (FIXTURES / "runs_pyasc_relu/level1/902_relu_smoke/sample_0/model_new.py").read_text()
+    add_kernel = (FIXTURES / "add_smoke" / "kernel.py").read_text()
+    add_wrapper = (FIXTURES / "add_smoke" / "model_new.py").read_text()
+    relu_kernel = (FIXTURES / "relu_smoke" / "kernel.py").read_text()
+    relu_wrapper = (FIXTURES / "relu_smoke" / "model_new.py").read_text()
 
     expect_clean("pyasc Add sample is accepted", Backend.PYASC, add_kernel, add_wrapper)
     expect_clean("pyasc ReLU sample is accepted", Backend.PYASC, relu_kernel, relu_wrapper)

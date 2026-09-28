@@ -1,6 +1,5 @@
-import torch
-
 import kernel
+import torch
 
 
 class ModelNew(torch.nn.Module):

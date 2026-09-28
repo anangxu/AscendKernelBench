@@ -7,10 +7,11 @@ Verified facts this encodes:
     host computes the tiling plan and passes it as ConstExpr values.
 """
 
-import asc
-import asc.lib.runtime as rt
 import torch
 import torch_npu  # noqa: F401
+
+import asc
+import asc.lib.runtime as rt
 
 DEFAULT_CORES = 8
 DEFAULT_TILES = 8
@@ -45,10 +46,10 @@ def add_kernel(
 
     for i in range(tiles):
         x_local = in_qx.alloc_tensor(x_gm.dtype)
-        asc.data_copy(x_local, x_gm[i * tile_len :], tile_len)
+        asc.data_copy(x_local, x_gm[i * tile_len:], tile_len)
         in_qx.enque(x_local)
         y_local = in_qy.alloc_tensor(y_gm.dtype)
-        asc.data_copy(y_local, y_gm[i * tile_len :], tile_len)
+        asc.data_copy(y_local, y_gm[i * tile_len:], tile_len)
         in_qy.enque(y_local)
 
         x_in = in_qx.deque(x_gm.dtype)
@@ -60,7 +61,7 @@ def add_kernel(
         in_qy.free_tensor(y_in)
 
         z_out = out_qz.deque(z_gm.dtype)
-        asc.data_copy(z_gm[i * tile_len :], z_out, tile_len)
+        asc.data_copy(z_gm[i * tile_len:], z_out, tile_len)
         out_qz.free_tensor(z_out)
 
 
@@ -79,7 +80,9 @@ def plan_tiling(total: int, align: int) -> tuple[int, int, int, int]:
         cores //= 2
     block_len = total // cores
     tiles = DEFAULT_TILES
-    while tiles > 1 and (block_len % tiles != 0 or (block_len // tiles) % align != 0):
+    while tiles > 1 and (
+        block_len % tiles != 0 or (block_len // tiles) % align != 0
+    ):
         tiles -= 1
     return cores, block_len, tiles, block_len // tiles
 
@@ -100,7 +103,5 @@ def add_launch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     x_pad[:total] = x.reshape(-1)
     y_pad[:total] = y.reshape(-1)
     z_pad = torch.empty_like(x_pad)
-    add_kernel[cores, rt.current_stream()](
-        x_pad, y_pad, z_pad, block_len, tiles, tile_len
-    )
+    add_kernel[cores, rt.current_stream()](x_pad, y_pad, z_pad, block_len, tiles, tile_len)
     return z_pad[:total].reshape(x.shape)

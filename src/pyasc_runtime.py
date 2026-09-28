@@ -111,9 +111,9 @@ def configure_platform(asc: ModuleType, device_index: int) -> str:
     The simulator runtime must be on LD_LIBRARY_PATH, see the pyasc guide.
     """
     config = importlib.import_module("asc.runtime.config")
-    requested = os.environ.get(
-        "ASCEND_KERNEL_BENCH_PYASC_BACKEND", "npu"
-    ).strip().lower()
+    requested = (
+        os.environ.get("ASCEND_KERNEL_BENCH_PYASC_BACKEND", "npu").strip().lower()
+    )
     if requested == "model":
         soc = os.environ.get("ASCEND_KERNEL_BENCH_PYASC_SOC", "Ascend910B4")
         config.set_platform(config.Backend.Model, config.Platform(soc))

@@ -81,9 +81,7 @@ def _module_scope(tree: ast.Module) -> set[str]:
                 if alias.name != "*":
                     scope.add(alias.asname or alias.name)
         elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            targets = (
-                node.targets if isinstance(node, ast.Assign) else [node.target]
-            )
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
                 for name_node in ast.walk(target):
                     if isinstance(name_node, ast.Name):
@@ -181,9 +179,7 @@ def _is_module_launch(call: ast.Call, module_names: set[str]) -> bool:
     return path.split(".", 1)[0] in module_names
 
 
-def _device_violations(
-    name: str, node: ast.FunctionDef, scope: set[str]
-) -> list[str]:
+def _device_violations(name: str, node: ast.FunctionDef, scope: set[str]) -> list[str]:
     """Flag torch/NumPy compute inside one @asc.jit device function.
 
     Args:
@@ -206,10 +202,7 @@ def _device_violations(
     violations: list[str] = []
     for call in _iter_calls(list(node.body)):
         target = call.func
-        if (
-            isinstance(target, ast.Attribute)
-            and target.attr in _TENSOR_COMPUTE_METHODS
-        ):
+        if isinstance(target, ast.Attribute) and target.attr in _TENSOR_COMPUTE_METHODS:
             head = _resolve(target.value)
             root = head.split(".")[0] if head else ""
             if root not in aliases and root not in scope:
@@ -273,21 +266,16 @@ def check_kernel_source(source: str) -> KernelFacts:
     scope = _module_scope(tree)
     for node in module_level:
         if node.name in jit_names:
-            facts.violations.extend(
-                _device_violations(node.name, node, scope)
-            )
+            facts.violations.extend(_device_violations(node.name, node, scope))
             continue
-        launched, unknown = _launch_sites(
-            node.body, jit_names, imported, module_names
-        )
+        launched, unknown = _launch_sites(node.body, jit_names, imported, module_names)
         launched &= jit_names
         facts.host_functions[node.name] = node
         if launched:
             facts.launches.update(launched)
             facts.launchers[node.name] = node
         calls_module = any(
-            _is_module_launch(call, module_names)
-            for call in _iter_calls(node.body)
+            _is_module_launch(call, module_names) for call in _iter_calls(node.body)
         )
         for tail in dedupe(unknown):
             facts.violations.append(
@@ -458,6 +446,7 @@ def check_pyasc_sources(kernel_source: str, wrapper_source: str) -> list[str]:
     violations.extend(check_pyasc_model_new(wrapper_source, facts))
     return dedupe(violations)
 
+
 def _is_scalar_expr(node: ast.AST, known: set[str]) -> bool:
     """Return True for literals and arithmetic over already-known scalars."""
     if isinstance(node, ast.Constant):
@@ -467,9 +456,7 @@ def _is_scalar_expr(node: ast.AST, known: set[str]) -> bool:
     if isinstance(node, ast.UnaryOp):
         return _is_scalar_expr(node.operand, known)
     if isinstance(node, ast.BinOp):
-        return _is_scalar_expr(node.left, known) and _is_scalar_expr(
-            node.right, known
-        )
+        return _is_scalar_expr(node.left, known) and _is_scalar_expr(node.right, known)
     return False
 
 
@@ -477,7 +464,10 @@ def _touches_torch(node: ast.AST) -> bool:
     """Return True when a body mentions torch or NumPy."""
     for inner in ast.walk(node):
         if isinstance(inner, ast.Name) and inner.id in {
-            "torch", "torch_npu", "numpy", "np",
+            "torch",
+            "torch_npu",
+            "numpy",
+            "np",
         }:
             return True
         if isinstance(inner, ast.Attribute):
@@ -485,7 +475,10 @@ def _touches_torch(node: ast.AST) -> bool:
             while isinstance(root, ast.Attribute):
                 root = root.value
             if isinstance(root, ast.Name) and root.id in {
-                "torch", "torch_npu", "numpy", "np",
+                "torch",
+                "torch_npu",
+                "numpy",
+                "np",
             }:
                 return True
     return False
@@ -509,17 +502,17 @@ def _collect_module_scalars(tree: ast.Module) -> set[str]:
     while changed:
         changed = False
         for node in tree.body:
-            value = node.value if isinstance(node, ast.AnnAssign) else (
-                node.value if isinstance(node, ast.Assign) else None
+            value = (
+                node.value
+                if isinstance(node, ast.AnnAssign)
+                else (node.value if isinstance(node, ast.Assign) else None)
             )
             if value is None or _touches_torch(value):
                 continue
             if not _is_scalar_expr(value, scalars):
                 continue
             targets = (
-                [node.target]
-                if isinstance(node, ast.AnnAssign)
-                else list(node.targets)
+                [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
             )
             for target in targets:
                 if isinstance(target, ast.Name) and target.id not in scalars:

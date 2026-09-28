@@ -153,6 +153,12 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   Compare pyasc speedups against other pyasc samples, and read the Ascend C
   numbers separately.
 
+## Evaluation runs
+
+The first end-to-end pyasc run, its configuration, its results, and the
+limitations of those numbers are in
+[`docs/reference/pyasc-evaluation-report.md`](../reference/pyasc-evaluation-report.md).
+
 ## Static checks
 
 `check_sample_sources(backend, kernel_source, wrapper_source)` dispatches the

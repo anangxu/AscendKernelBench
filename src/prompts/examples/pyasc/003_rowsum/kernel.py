@@ -14,16 +14,15 @@ The TQue style is used on purpose: it reserves UB and emits the pipe
 synchronisation itself, which a bare LocalTensor address does not.
 """
 
+import asc
+import asc.lib.runtime as rt
 import torch
 import torch_npu  # noqa: F401
 
-import asc
-import asc.lib.runtime as rt
-
-MAX_COLS = 64                       # contiguous mask limit for fp32
+MAX_COLS = 64  # contiguous mask limit for fp32
 BYTE_ALIGN = 32
-BLOCK_ELEMS = BYTE_ALIGN // 4       # fp32 elements in one 32-byte block
-MIN_ROWS_PER_CORE = BLOCK_ELEMS     # a write-back is a whole number of blocks
+BLOCK_ELEMS = BYTE_ALIGN // 4  # fp32 elements in one 32-byte block
+MIN_ROWS_PER_CORE = BLOCK_ELEMS  # a write-back is a whole number of blocks
 DEFAULT_CORES = 8
 
 
@@ -73,9 +72,7 @@ def rowsum_kernel(
 def pick_cores(rows: int) -> int:
     """Return the largest core count that splits rows into whole blocks."""
     cores = DEFAULT_CORES
-    while cores > 1 and (
-        rows % cores != 0 or (rows // cores) % MIN_ROWS_PER_CORE != 0
-    ):
+    while cores > 1 and (rows % cores != 0 or (rows // cores) % MIN_ROWS_PER_CORE != 0):
         cores //= 2
     return cores
 

@@ -80,9 +80,7 @@ PYASC_MIN_EVENT_WALL_RATIO = 0.05
 # limitation, not a per-operator one, and it is reported as such: the harness
 # never casts the tensor to a supported dtype, because that would measure a
 # different task than the one the reference model defines.
-PYASC_UNSUPPORTED_DTYPES = frozenset(
-    {"bfloat16", "bool", "complex64", "complex128"}
-)
+PYASC_UNSUPPORTED_DTYPES = frozenset({"bfloat16", "bool", "complex64", "complex128"})
 ###########################################################################
 ###########################################################################
 
@@ -620,7 +618,9 @@ class SampleEvaluator:
                 ref_out = self._run_reference(inputs, raw_inputs, 0, stage="first call")
                 self.torch.npu.synchronize(device=self.req.device)
             self.metadata["first_call_correct"] = self._outputs_ok(ref_out, first_out)
-            self.metadata["first_call_max_difference"] = max_abs_diff(ref_out, first_out)
+            self.metadata["first_call_max_difference"] = max_abs_diff(
+                ref_out, first_out
+            )
         except Exception as exc:
             self.metadata["first_call_correct"] = None
             self.metadata["first_call_check_error"] = repr(exc)
@@ -698,9 +698,7 @@ class SampleEvaluator:
                     self.new_model(*inputs)
                 self.torch.npu.synchronize()
                 wall_ms = (
-                    (time.perf_counter() - started)
-                    * 1000.0
-                    / PYASC_TIMING_WALL_TRIALS
+                    (time.perf_counter() - started) * 1000.0 / PYASC_TIMING_WALL_TRIALS
                 )
         except Exception as exc:
             self.metadata["timing_valid"] = False

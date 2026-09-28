@@ -125,6 +125,7 @@ CLI facts worth remembering:
 | `build_template/CMakeLists.txt` | The single build path that produces `libcustom_op.so`. |
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
 | `docs/reference/pyasc-device-evidence.md` | The measured pyasc facts behind the guide, with versions, commands, inputs, observed outputs, and the boundary of each claim. |
+| `docs/reference/pyasc-evaluation-report.md` | The first end-to-end pyasc evaluation: configuration, results, the framework fixes it forced, and what the numbers do not cover. |
 | `experiments/pyasc_device_probes/` | Device-only probes that re-measure those facts. Standalone scripts, not part of `tests/`, imported by nothing in `src/`. |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 

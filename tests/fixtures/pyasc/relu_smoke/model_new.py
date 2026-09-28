@@ -1,5 +1,6 @@
-import kernel
 import torch
+
+import kernel
 
 
 class ModelNew(torch.nn.Module):
@@ -8,5 +9,5 @@ class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        return kernel.add_launch(A, B)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return kernel.relu_launch(x)

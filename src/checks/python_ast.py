@@ -406,14 +406,16 @@ class WrapperSemantics(ast.NodeVisitor):
 
     def _sink_message(self) -> str:
         """Return the missing-sink violation for the active sink."""
-        return self.sink.message() if self.sink is not None else (
-            "never calls torch.ops.custom_op — the wrapper must call the "
-            "evaluator-loaded Ascend C operator"
+        return (
+            self.sink.message()
+            if self.sink is not None
+            else (
+                "never calls torch.ops.custom_op — the wrapper must call the "
+                "evaluator-loaded Ascend C operator"
+            )
         )
 
-    def _resolve(
-        self, node: ast.AST, unwrap_subscript: bool = False
-    ) -> str | None:
+    def _resolve(self, node: ast.AST, unwrap_subscript: bool = False) -> str | None:
         """Return the dotted path for a name or attribute, if resolvable.
 
         Args:
