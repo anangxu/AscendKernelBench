@@ -78,10 +78,8 @@ Kernel semantics that the prompt, the checks, and the evaluator all rely on:
 ## Verified device semantics
 
 These were measured on an Ascend 910B4 (CANN 9.1.0, pyasc 1.1.1, torch_npu
-2.10.0), not read off the docstrings. Versions, inputs, observed outputs, and
-the boundary of each claim are in
-[`docs/reference/pyasc-device-evidence.md`](../reference/pyasc-device-evidence.md),
-and the runnable probes are in `experiments/pyasc_device_probes/`:
+2.10.0), not read off the docstrings. The scope of each measurement is the
+device, the pyasc release and the call style named with it:
 
 * `asc.whole_reduce_sum(dst, src, mask=..., repeat_time=..., dst_rep_stride=...,
   src_blk_stride=..., src_rep_stride=...)` reduces **per repeat**, so
@@ -115,8 +113,8 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   that is not a licence to insert an unrelated vector op: a vector-produced
   result must be waited on with the vector event (`MTE2_V` in, `V_MTE3` out),
   and a loop that reuses one buffer must also keep the previous reader finished
-  before overwriting it. Scope, counts and the open questions are in
-  `docs/reference/pyasc-device-evidence.md`.
+  before overwriting it. Whether the compiler should insert that dependency on
+  its own is an open question.
 * The bundled reduction example accepts only shapes it addresses exactly: cols
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
   8-row blocks per core. It raises ValueError otherwise, because a column count
@@ -152,12 +150,6 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   every launch, so small operators look far slower than eager `torch_npu`.
   Compare pyasc speedups against other pyasc samples, and read the Ascend C
   numbers separately.
-
-## Evaluation runs
-
-The first end-to-end pyasc run, its configuration, its results, and the
-limitations of those numbers are in
-[`docs/reference/pyasc-evaluation-report.md`](../reference/pyasc-evaluation-report.md).
 
 ## Static checks
 
