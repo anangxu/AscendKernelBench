@@ -22,10 +22,20 @@ def _threshold_name(t: float) -> str:
 
 
 def sample_speedup(sample: Mapping[str, Any]) -> float | None:
-    """Return speedup (ref mean / kernel mean), or None if unavailable."""
+    """Return speedup (ref mean / kernel mean), or None if unusable.
+
+    A sample whose timing the backend rejected is excluded here, and this is
+    the only gate the performance numbers read: the thresholds above fast_0,
+    the geometric mean and the per-problem best speedup all come through it.
+    Correctness rates are computed from the correctness flag instead, so the
+    sample still counts there.
+    """
     if not sample.get("correctness"):
         return None
-    if (sample.get("metadata") or {}).get("excessive_speedup"):
+    metadata = sample.get("metadata") or {}
+    if metadata.get("excessive_speedup"):
+        return None
+    if metadata.get("timing_valid") is False:
         return None
     runtime = sample.get("runtime")
     ref_runtime = sample.get("ref_runtime")
@@ -99,6 +109,21 @@ def summarize_eval_results(
     hidden_failed = sum(
         1 for sample in all_samples if _meta(sample).get("hidden_failed")
     )
+    # Samples the backend cannot run at all stay in every rate above; these
+    # counters keep them visible so a success rate cannot hide the gap.
+    unsupported_dtype = sum(
+        1
+        for sample in all_samples
+        if _meta(sample).get("failure_stage") == "unsupported_dtype"
+    )
+    unsupported_operator = sum(
+        1
+        for sample in all_samples
+        if _meta(sample).get("failure_stage") == "unsupported_operator"
+    )
+    timing_invalid = sum(
+        1 for sample in all_samples if _meta(sample).get("timing_valid") is False
+    )
     per_problem: dict[str, dict[str, Any]] = {}
     for problem_id, samples in eval_results.items():
         n = len(samples)
@@ -117,6 +142,15 @@ def summarize_eval_results(
         "npu_reference": npu_reference,
         "excessive_speedup": flagged,
         "hidden_failed": hidden_failed,
+        "unsupported_dtype": unsupported_dtype,
+        "unsupported_dtype_backend_wide": sum(
+            1
+            for sample in all_samples
+            if _meta(sample).get("failure_stage") == "unsupported_dtype"
+            and _meta(sample).get("limitation_scope") == "backend"
+        ),
+        "unsupported_operator": unsupported_operator,
+        "timing_invalid": timing_invalid,
         "fast_p": fast_p(all_samples),
         "geometric_mean_speedup_correct_only": geometric_mean_speedup(all_samples),
         "mean_sol_score": mean_sol_score(all_samples),

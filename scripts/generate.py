@@ -14,6 +14,7 @@ from loguru import logger
 from rich.console import Console
 
 from src import rundir
+from src.backend import Backend
 from src.cli_util import (
     cli_progress,
     generation_run_config,
@@ -23,7 +24,7 @@ from src.cli_util import (
 )
 from src.llm import LLMClient
 from src.log import die, setup_logging
-from src.prompt import SYSTEM_PROMPT, build_prompt
+from src.prompt import PYASC_SYSTEM_PROMPT, SYSTEM_PROMPT, build_prompt
 
 console = Console()
 
@@ -60,6 +61,12 @@ def main() -> None:
         choices=["low", "medium", "high"],
         help="thinking depth; omitted when unset",
     )
+    parser.add_argument(
+        "--backend",
+        default=None,
+        choices=[backend.value for backend in Backend],
+        help="authoring language: ascendc (default) or pyasc",
+    )
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
@@ -69,15 +76,19 @@ def main() -> None:
         hardware=args.hardware,
     )
     config, hardware = runtime.config, runtime.hardware
-    settings = resolve_generation_settings(
-        config,
-        model=args.model,
-        prompt_mode=args.prompt_mode,
-        temperature=args.temperature,
-        num_samples=args.n_samples,
-        reasoning_effort=args.reasoning_effort,
-        max_tokens=args.max_tokens,
-    )
+    try:
+        settings = resolve_generation_settings(
+            config,
+            model=args.model,
+            prompt_mode=args.prompt_mode,
+            temperature=args.temperature,
+            num_samples=args.n_samples,
+            reasoning_effort=args.reasoning_effort,
+            max_tokens=args.max_tokens,
+            backend=args.backend,
+        )
+    except ValueError as exc:
+        die(str(exc))
 
     tasks = select_tasks(
         level=args.level,
@@ -108,6 +119,10 @@ def main() -> None:
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
         reasoning_effort=settings.reasoning_effort,
+        backend=settings.backend,
+    )
+    system_prompt = (
+        PYASC_SYSTEM_PROMPT if settings.backend is Backend.PYASC else SYSTEM_PROMPT
     )
     total = len(tasks) * settings.num_samples
     failures = 0
@@ -118,11 +133,12 @@ def main() -> None:
                 task,
                 hardware,
                 mode=settings.prompt_mode,
+                backend=settings.backend,
             )
             for sample_id in range(settings.num_samples):
                 progress.update(bar, description=f"{task.task_id} s{sample_id}")
                 try:
-                    result = client.generate(prompt, system=SYSTEM_PROMPT)
+                    result = client.generate(prompt, system=system_prompt)
                     rundir.save_sample(
                         run_dir,
                         task.task_id,
@@ -130,6 +146,7 @@ def main() -> None:
                         prompt=prompt,
                         generation=result.generation,
                         raw_response=result.raw_text,
+                        backend=settings.backend,
                     )
                 except Exception as exc:
                     failures += 1

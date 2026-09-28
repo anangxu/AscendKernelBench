@@ -32,6 +32,8 @@ eval_timeout: 300
 ########################## GENERATION #############################
 # Thinking depth (low | medium | high); empty omits the parameter. Reasoning
 # tokens count against max_tokens, which is why the budget is this large.
+# backend selects the authoring language (ascendc | pyasc). It is recorded in
+# the run's generation_config.yaml; evaluation reads it from there.
 generation:
   model: deepseek-flash
   temperature: 0.0
@@ -39,4 +41,5 @@ generation:
   num_samples: 1
   prompt_mode: one_shot
   reasoning_effort: high
+  backend: ascendc
 ########################## GENERATION #############################

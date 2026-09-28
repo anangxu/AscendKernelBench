@@ -63,7 +63,7 @@ Batch generation exits successfully if at least one requested sample was saved. 
 
 ## No samples, stale files, or unexpected run contents
 
-`evaluate.py` discovers `level*/<task>/sample_*` directories only when both `custom_op.asc` and `model_new.py` exist. An empty run directory or incomplete sample produces no evaluable sample. Sample directory names must end in an integer, such as `sample_0`.
+`evaluate.py` discovers `level*/<task>/sample_*` directories only when both of the run backend's artifacts exist: `custom_op.asc` and `model_new.py` for Ascend C, or `kernel.py` and `model_new.py` for pyasc. An empty run directory or incomplete sample produces no evaluable sample. Sample directory names must end in an integer, such as `sample_0`.
 
 Run names are reusable, but the scripts do not provide automatic resume or experiment isolation. Regeneration overwrites matching sample files and the run configuration. Old results or extra sample directories can remain. Use a fresh run name for each experiment and preserve the original run when testing changes.
 

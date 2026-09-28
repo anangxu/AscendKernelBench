@@ -42,7 +42,7 @@ The batch evaluator visits complete sample directories sequentially and re-evalu
 
 ## Worker and build lifecycle
 
-For each sample, the host checks that `custom_op.asc` and `model_new.py` exist and applies the [candidate static checks](../task_authoring.md#candidate-rules-and-checks). A static violation produces a failed result without launching the worker.
+For each sample, the host checks that the run backend's kernel artifact (`custom_op.asc` or `kernel.py`) and `model_new.py` exist and applies the [candidate static checks](../task_authoring.md#candidate-rules-and-checks). A static violation produces a failed result without launching the worker.
 
 An accepted sample runs in a fresh subprocess using the same Python interpreter as the host. The host starts `scripts/_eval_worker.py`, which adds the checkout root to `sys.path` and calls `eval_device.eval_sample_on_device`. It builds `libcustom_op.so` with the fixed `build_template/CMakeLists.txt`, loads that library with `torch.ops.load_library` **in the worker process** (not via pybind import, `sys.path`, or a global install), then loads the task and `ModelNew`. Results travel through a temporary JSON file rather than standard output.
 
