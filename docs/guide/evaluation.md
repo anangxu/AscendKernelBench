@@ -145,6 +145,8 @@ After the timing attempt, the evaluator draws another input set using `seed + 1`
 
 A timing exception is recorded in `metadata.runtime_error`. If the post-timing check succeeds, the result may remain correct with missing or partially populated timing fields.
 
+Every runtime exception, at any step, also carries a generic classification beside its message: `runtime_error_class`, `runtime_error_stage`, and `runtime_error_summary`. The class names the exception and the stage names the step that raised it, so an out-of-memory error in a correctness trial and one during timing are told apart without reading the message. The classification records what happened and where; it never decides whether the model or the environment is responsible. `scripts/analyze.py` prints the counts by class and by stage, and neither counter changes a scoring denominator. See [results and scoring](results.md).
+
 When both mean runtimes are available, a speedup strictly above `excessive_speedup` is marked for manual review. The flag does not automatically make the sample incorrect. It excludes the sample from positive `fast_p` thresholds and geometric mean speedup while preserving its contribution to `fast_0` and pass@k. See [results and scoring](results.md).
 
 ## Archive a reference baseline
