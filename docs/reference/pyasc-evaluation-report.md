@@ -104,50 +104,103 @@ of that average rather than counted as zero.
 
 ### Per-stage failures
 
+Every candidate was re-evaluated with the final classification code, with the
+previous result kept beside the new one, and the correctness verdicts are
+unchanged by the re-evaluation.
+
 | Outcome | Samples | How it is recorded |
 | --- | --- | --- |
 | Correct | 6 | `correctness=true` |
-| First call failed (`jit`) | 20 | `compiled=false`, `failure_stage=jit` |
-| Runtime out of memory | 8 | `correctness=false`, `failure_stage=null` |
-| Ran and disagreed | 1 | `correctness=false`, `failure_stage=null` |
+| First call failed | 20 | `compiled=false`, `failure_stage=jit` |
+| Runtime error in a correctness trial | 9 | `failure_stage=execution`, `runtime_error_stage=candidate_trial` |
 | Static check | 1 | `failure_stage=static_check` |
 
+The nine runtime errors split into two exception classes:
+`OutOfMemoryError` 8 and `RuntimeError` 1. The `RuntimeError` is one
+`90_cumprod` candidate whose kernel launch returned device status `507017`; it
+was recorded the same way before this change, only without a class or a stage
+to name it. The eight `OutOfMemoryError` samples are the capacity limit below.
+
 The static-check sample is a `kernel.py` that does not parse as Python. The
-`jit` group is dominated by convolution, transposed-convolution and 3D
-matmul tasks whose first subscripted call raised.
+`jit` group is dominated by convolution, transposed-convolution and 3D matmul
+tasks whose first subscripted call raised, with `CodegenError` and a missing
+`asc` attribute as the common messages.
 
-### Three tasks have no verdict at all: the instance memory ceiling
+The engine prints the two classification counters in its own report, next to
+the existing counters and with every rate unchanged:
 
-The eight out-of-memory samples are not model failures and not pyasc failures.
-They are all in tasks whose `get_inputs()` allocates a 1.61e9-element fp32
-tensor (4096 x 393216), which is 6.00 GiB per copy:
+```text
+│ runtime failures (class)            │ OutOfMemoryError 8, RuntimeError 1 │
+│ runtime failures (stage)            │                  candidate_trial 9 │
+```
 
-| Task | Input per copy | Evaluable on this instance |
+### Three tasks have no correctness verdict: the instance memory ceiling
+
+Eight samples failed with an out-of-memory error, all of them in tasks whose
+`get_inputs()` allocates a 1.61e9-element fp32 tensor (4096 x 393216), which is
+6.00 GiB per copy:
+
+| Task | Input per copy | Correctness verdict on this instance |
 | --- | --- | --- |
-| `level1/20_LeakyReLU` | 6.00 GiB | no |
-| `level1/25_Swish` | 6.00 GiB | no |
-| `level1/30_Softsign` | 6.00 GiB | no |
-| `level1/35_GroupNorm_` | 7.00 GiB | no |
+| `level1/20_LeakyReLU` | 6.00 GiB | none |
+| `level1/25_Swish` | 6.00 GiB | none |
+| `level1/30_Softsign` | 6.00 GiB | none |
+| `level1/35_GroupNorm_` | 7.00 GiB | none |
 
 Measured on the instance with a standalone allocation loop, holding one
 `torch.empty` per iteration: four copies of 6.00 GiB fit (24.00 GiB allocated),
 the fifth fails with the identical message the harness recorded
 (`Tried to allocate 6.00 GiB ... 24.00 GiB already allocated ... 29.49 GiB
-total capacity`). The worker therefore holds four copies of the input when it
-calls the candidate, and the candidate's own result is the fifth. Nothing here
-is specific to pyasc: the same protocol peak applies to the Ascend C backend
-and to the upstream harness.
+total capacity`). At the moment the worker calls the candidate it therefore
+already holds four copies of the input, and the candidate's own result would be
+the fifth.
 
-Two consequences for reading the table above, both stated rather than fixed:
+That is the measured shape of the failure. The classification records it as an
+`OutOfMemoryError` raised at the execution stage and stops there: an
+out-of-memory error can come from a tiling plan that asks for too much or from
+the protocol peak, and this report does not decide between them for these
+samples. The same protocol peak applies to the Ascend C backend and to the
+upstream harness, so the limit is not a pyasc property.
 
-* The harness has no counter for a capacity failure. Those samples appear as
-  plain `correctness=false` with no stage, so `fast_0` and `pass@1` above treat
-  an unmeasurable task as a wrong answer.
-* Over the twelve tasks that do have a correctness verdict, `pass@1` is
-  `6 / 12 = 0.5`; over all fifteen tasks it is `0.133`. The difference is
-  entirely the three tasks whose samples could not be measured on a 32 GB
-  instance. Both numbers are reported; neither is presented as the score of
-  the backend.
+Two consequences for reading the table above:
+
+* A capacity failure is classified rather than unnamed: such samples carry
+  `runtime_error_class` and `runtime_error_stage`, and the report prints
+  counters by class and by stage. No sample moves out of any denominator.
+* The score is a task average over the tasks that have samples, which the next
+  section states exactly.
+
+### The two numbers, and which of them is a metric
+
+`pass@1` averages the per-task correct fraction `c / n` over the tasks that have
+samples. This run has 15 such tasks and six correct samples, which is
+`2 / 15 = 0.133`: only two tasks have a nonzero `c`. The run is incomplete, so
+the average covers 15 of the 20 tasks and 8 of them have the planned three
+samples.
+
+| Task | n | c | c / n |
+| --- | --- | --- | --- |
+| `5_Matrix_scalar_multiplication` | 3 | 3 | 1.00 |
+| `10_3D_tensor_matrix_multiplication` | 3 | 0 | 0.00 |
+| `15_Matmul_for_lower_triangular_matrices` | 3 | 3 | 1.00 |
+| `20_LeakyReLU` | 3 | 0 | 0.00 |
+| `25_Swish` | 3 | 0 | 0.00 |
+| `30_Softsign` | 3 | 0 | 0.00 |
+| `35_GroupNorm_` | 2 | 0 | 0.00 |
+| `40_LayerNorm` | 2 | 0 | 0.00 |
+| `60_conv_standard_3D__square_input__asymmetric_kernel` | 2 | 0 | 0.00 |
+| `70_conv_transposed_3D__asymmetric_input__square_kernel` | 2 | 0 | 0.00 |
+| `75_conv_transposed_2D_asymmetric_input_asymmetric_kernel_strided__grouped____padded____dilated__` | 2 | 0 | 0.00 |
+| `80_conv_standard_2D_square_input_asymmetric_kernel___dilated____padded__` | 1 | 0 | 0.00 |
+| `85_conv_depthwise_2D_asymmetric_input_asymmetric_kernel` | 3 | 0 | 0.00 |
+| `90_cumprod` | 1 | 0 | 0.00 |
+| `95_CrossEntropyLoss` | 3 | 0 | 0.00 |
+
+Eight of the twenty tasks have the planned three samples. Over just those eight,
+`pass@1` and `pass@3` are both `2 / 8 = 0.25`. That is a subset result over the
+eight complete tasks, and it is not a statement about all twenty: it leaves out
+seven tasks that have one or two samples and it inherits the capacity limit
+below for three of the eight.
 
 ### Reading the speedups
 
@@ -160,70 +213,59 @@ the evaluation semantics section of the backend guide.
 ## Medium-effort probe (separate run, never merged)
 
 A second run with the same model, endpoint, temperature, prompt mode, token cap
-and backend, and `reasoning_effort: medium` instead of `high`, was used to
-measure what one candidate costs before committing to a full 20 x 3 medium
-batch. It lives in its own run directory; the two runs never share a `pass@k`.
+and backend, and `reasoning_effort: medium` instead of `high`, measured what a
+candidate costs before committing to a full batch. It lives in its own run
+directory; the two runs never share a `pass@k`.
 
-Three tasks, one candidate each, one candidate per subprocess with a recorded
-1800 s cap. Instrumentation is per HTTP request, written to disk as it lands:
-wall seconds, `finish_reason`, `prompt_tokens`, `completion_tokens` and
-`reasoning_tokens`.
+Three candidate generations were attempted, one per task class, each in its own
+subprocess with a recorded 1800 s cap. Instrumentation is per HTTP request,
+written to disk as it lands: wall seconds, `finish_reason`, `prompt_tokens`,
+`completion_tokens` and `reasoning_tokens`. One of the three produced a saved
+candidate.
 
-| Task | Class | Outcome | Candidate wall | App attempts | HTTP requests | Completion tokens | Of which reasoning |
+| Task | Class | Outcome | Candidate wall | Application attempts | HTTP requests measured | Completion tokens | Of which reasoning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `level1/30_Softsign` | element-wise | sample saved | 90.3 s | 1 | 2 | 23 284 | 22 097 |
+| `level1/30_Softsign` | element-wise | candidate saved | 90.3 s | 1 | 2 | 23 284 | 22 097 |
 | `level1/90_cumprod` | reduction | generation failed | 1216.8 s | 2 | 4 | 262 144 | 262 144 |
 | `level1/50_conv_standard_2D__square_input__square_kernel` | convolution | generation failed | 1224.9 s | 2 | 4 | 262 144 | 262 144 |
 
-Three findings, all measured:
+Probe totals: 3 candidate generations attempted, 1 saved candidate, 2
+generation failures, 5 application attempts, 10 HTTP requests, 2532 s (42.2
+min) of measured wall clock and 547 572 completion tokens.
 
-* **Two of the three tasks produce no candidate at all at medium effort.** Both
-  allowed attempts ended with `finish_reason=length` and
-  `completion_tokens=131072`, with `reasoning_tokens` equal to the whole
-  completion budget: the model never emitted a visible answer. The cap that
-  truncated them is the run's own `max_tokens=131072`, not a server limit.
-* **A heavy candidate costs about 20 minutes and 262 144 completion tokens for
-  zero samples.** The five per-request walls were 617.9, 598.5, 590.4 and
-  634.3 s for the two heavy tasks, i.e. 9.8 to 10.6 minutes per attempt.
-* **The only candidate that was produced could not be judged on this device.**
-  `30_Softsign` is one of the 6.00 GiB-input tasks, so its single sample was
-  evaluated and recorded as the same runtime out-of-memory failure. The probe's
-  light task is therefore the capacity-blocked one, not the cheap one.
+What the two generation failures are, for those two candidates only: every
+allowed attempt ended with `finish_reason=length` and a `completion_tokens`
+equal to the run's own `max_tokens=131072`, with `reasoning_tokens` equal to the
+whole completion budget, so the model never emitted a visible answer and no
+candidate exists to evaluate. The cap that truncated them is the run's, not a
+server limit. Each of the four fenced requests took 590.4 to 634.3 s, that is
+9.8 to 10.6 minutes.
 
-### What a full medium run would cost (extrapolation)
+Two more statements stay inside what was measured:
 
-This is an extrapolation from the anchors above, not a measurement. The subset
-has ten element-wise or metadata tasks and ten convolution, transposed
-convolution, pooling or reduction tasks. A full 20 x 3 medium run is 60
-candidates, 30 per class:
-
-* light class: 30 candidates, one attempt each at the measured 90 s to a few
-  minutes, so roughly one to two hours of endpoint time;
-* heavy class: 30 candidates, two truncated attempts each at the measured
-  20.4 minutes, so about **10 hours of endpoint time and about 7.9 million
-  completion tokens, against zero samples** unless the token cap or the
-  reasoning effort changes.
-
-Parallelism changes only the wall clock of the heavy class (about 1.7 hours at
-six workers); it does not change the token cost. The binding constraint is the
-131072-token cap being consumed entirely by reasoning, so the budget decision
-comes before the scheduling decision.
+* The saved candidate is `30_Softsign`, one of the 6.00 GiB-input tasks, so its
+  evaluation is the capacity failure described above. The probe's element-wise
+  task is the capacity-blocked one, not a cheap one.
+* Nothing here is asserted about the other tasks of the heavy classes. Two of
+  three probed candidates burned their whole token budget; whether the remaining
+  nine heavy tasks of the subset do the same is unmeasured, and no cost for them
+  is estimated here.
 
 ### What `max_retries=1` controls
 
 The run records three retry layers, and only the first is the engine's:
 
-| Layer | Setting | Measured in the probe |
+| Layer | Setting | Probe measurement |
 | --- | --- | --- |
-| Application attempts per candidate | `LLMClient.generate(max_retries=1)`, 2 attempts; a rejected attempt is retried with a retry turn appended to the messages | 2 on both heavy tasks |
-| Parser fallback per attempt | structured parse first, then fenced blocks | 2 HTTP requests per attempt: the structured request is answered `HTTP 400` by this endpoint in about 0.2 s, then the fenced request runs |
-| SDK network retries per request | `OpenAI()` is built without `max_retries`, so the SDK default of 2 applies | 0 observed |
+| Application attempts per candidate | `LLMClient.generate(max_retries=1)`: 2 attempts, and a rejected attempt is retried with a retry turn appended to the messages | 2 measured on each of the two failed candidates, 1 on the saved one |
+| Parser fallback per attempt | structured parse first, then fenced blocks | 2 requests measured per attempt on every attempt: the structured request is answered `HTTP 400` in about 0.2 s, then the fenced request runs |
+| SDK network retries per request | `OpenAI()` is built without `max_retries`, so the SDK default of 2 applies | 0 measured: no transport error occurred |
 
-The ceiling is therefore 12 HTTP requests per candidate (2 attempts x 2 parsers
-x 3 SDK tries), not 2 and not 6. The probe saw the two-per-attempt pattern on
-every attempt and no SDK retry, because no transport error occurred. The
-per-request timeout is 1800 s and it never fired: the longest fenced request
-was 634.3 s.
+Measured request counts are 2 per attempt and 10 for the probe. The conditional
+ceiling is 12 requests per candidate, 2 attempts x 2 parsers x 3 SDK tries; it
+was not reached, and no request was retried at the SDK layer. The per-request
+timeout is 1800 s and it never fired: the longest measured fenced request was
+634.3 s.
 
 ## Completed tests
 
@@ -311,6 +353,32 @@ sample from an unmeasurable verdict to its real verdict, two of which are real
 model-side failures and two of which are the instance capacity limit. After the
 fix, 35 of the 36 samples in the run pass the static checks; the one that does
 not is a `kernel.py` that does not parse as Python.
+
+Accepting a delegating or dispatching launcher also opened a hole in the other
+direction, which the negative controls in `tests/test_checks_backend.py` caught:
+the host shape-arithmetic rule was applied only to the function that holds the
+launch subscript, so a dispatcher could do tensor arithmetic. `scalar_arith` now
+covers every host function that can reach a launch, and the scalar collector
+accepts a module-level list of scalars (`_GOOD = [0]`, a real pattern for
+remembering which variant worked) while a container holding a tensor stays
+non-scalar. Five negative controls pin the accepted shapes against abuse: host
+compute behind a dict-selected kernel, behind a launcher alias, behind a
+launcher dispatch, behind a whitelisted metadata call, and a dispatch collection
+of tensors. All 36 samples still pass the static checks after the tightening,
+so closing the hole cost no real sample.
+
+### Runtime failures are classified by class and by stage
+
+Before this change a runtime failure was a message string and nothing else:
+`failure_stage` was absent, so an out-of-memory error and a device-status error
+both looked like unnamed wrong answers, and no counter could separate them.
+Every runtime exception now records `runtime_error_class`,
+`runtime_error_stage` and `runtime_error_summary` where it is raised, and
+`summarize_eval_results` counts them into `runtime_error_classes` and
+`runtime_error_stages`, which `scripts/analyze.py` prints even when both are
+empty. The classification names the symptom and the step and deliberately does
+not decide who is responsible. No sample moves out of any denominator: the
+re-evaluation above left `fast_0`, `pass@1` and every other rate unchanged.
 
 ## Known limitations
 
