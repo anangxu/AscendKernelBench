@@ -253,6 +253,39 @@ def _helper_cases() -> list[tuple[str, bool, str]]:
             + RUN_HEAD + "    total = RUNNER.helper(x)\n" + launch,
         ),
         (
+            "a helper reached by getattr with a constant name is rejected",
+            False,
+            "class Holder:\n"
+            "    pass\n\n\n"
+            "def helper(x: torch.Tensor) -> int:\n"
+            "    scaled = x * 2\n"
+            "    return scaled.numel()\n\n\n"
+            "Holder.helper = helper\n\n\n"
+            + RUN_HEAD + "    total = getattr(Holder, 'helper')(x)\n" + launch,
+        ),
+        (
+            "getattr with a scalar argument stays accepted",
+            True,
+            "class Holder:\n"
+            "    pass\n\n\n"
+            "def plan(rows: int) -> int:\n"
+            "    return (rows + 1) % 4\n\n\n"
+            "Holder.plan = plan\n\n\n"
+            + RUN_HEAD + "    total = getattr(Holder, 'plan')(x.numel())\n" + launch,
+        ),
+        (
+            "known blind spot: a computed getattr name is not resolved",
+            True,
+            "class Holder:\n"
+            "    pass\n\n\n"
+            "def helper(x: torch.Tensor) -> int:\n"
+            "    scaled = x * 2\n"
+            "    return scaled.numel()\n\n\n"
+            "Holder.helper = helper\n"
+            "_NAME = 'helper'\n\n\n"
+            + RUN_HEAD + "    total = getattr(Holder, _NAME)(x)\n" + launch,
+        ),
+        (
             "an unknown argument is not treated as a scalar",
             False,
             "_BOUND = torch.empty(2)\n\n\n"

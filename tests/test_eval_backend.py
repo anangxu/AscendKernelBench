@@ -1384,6 +1384,61 @@ def test_sol_mean_uses_only_correct_samples_with_valid_timing() -> None:
     )
 
 
+FAKE_TASK_BAD_INIT = FAKE_TASK.format(fail_at=0).replace(
+    "def get_init_inputs():\n    return []",
+    "def get_init_inputs():\n    raise OutOfMemoryError('init inputs failed')",
+)
+
+
+def test_run_survives_device_preparation_failure() -> None:
+    """A failure while reading init inputs becomes a payload, not a crash."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = Path(tmp)
+        (sample / "kernel.py").write_text("# stub kernel\n")
+        (sample / "model_new.py").write_text(FAKE_MODEL_NEW)
+        request = make_request(sample, "pyasc").model_copy(
+            update={"measure_performance": True, "task_py": FAKE_TASK_BAD_INIT}
+        )
+        evaluator = SampleEvaluator(request)
+        with RunFakes(evaluator, recheck_ok=True) as fakes:
+            result = evaluator.run()
+        metadata = result["metadata"]
+        check(
+            "device preparation failure returns a payload",
+            isinstance(result, dict) and result.get("correctness") is False,
+            repr(result.get("correctness")),
+        )
+        check(
+            "device preparation failure is not compiled for pyasc",
+            result["compiled"] is False,
+            repr(result["compiled"]),
+        )
+        check(
+            "device preparation failure is classified",
+            metadata.get("failure_stage") == "execution"
+            and metadata.get("runtime_error_class") == "OutOfMemoryError"
+            and metadata.get("runtime_error_stage") == "device_preparation",
+            repr(
+                (
+                    metadata.get("failure_stage"),
+                    metadata.get("runtime_error_class"),
+                    metadata.get("runtime_error_stage"),
+                )
+            ),
+        )
+        check(
+            "device preparation failure keeps the build diagnostics",
+            metadata.get("build_mode") == "pyasc"
+            and isinstance(metadata.get("build_seconds"), float),
+            repr((metadata.get("build_mode"), metadata.get("build_seconds"))),
+        )
+        check(
+            "device preparation failure never reached the device comparison",
+            fakes.calls["outputs"] == 0,
+            repr(fakes.calls),
+        )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -1411,6 +1466,7 @@ def main() -> int:
     test_metadata_merge_keeps_diagnostics_and_prefers_failures()
     test_run_keeps_correctness_when_timing_inputs_fail()
     test_run_discards_incomplete_timing()
+    test_run_survives_device_preparation_failure()
     test_sol_mean_uses_only_correct_samples_with_valid_timing()
     print()
     if FAILURES:
