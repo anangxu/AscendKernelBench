@@ -170,6 +170,11 @@ class SampleEvaluator:
         self.kernel_module: Any = None
         self.sample_path = Path(request.sample_dir)
         self.so_path: Path | None = None
+        # Whether this sample has really compiled. Set by a successful Ascend C
+        # build and by a successful pyasc first call; never inferred from the
+        # backend name, because a pyasc failure before the first call has not
+        # compiled anything.
+        self.compiled = False
         self.torch: Any = None
         self.torch_device: Any = None
         self.dtype: Any = None
@@ -205,7 +210,7 @@ class SampleEvaluator:
         self.torch = torch
         failed = self._build_and_load()
         if failed is not None:
-            return failed
+            return self._with_build_facts(failed)
         failed = self._load_python_modules()
         if failed is not None:
             return self._with_build_facts(failed)
@@ -234,12 +239,20 @@ class SampleEvaluator:
         return self._compiled(correctness=True)
 
     def _with_build_facts(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Merge the recorded build facts into a failure payload."""
+        """Merge the diagnostics collected so far into a failure payload.
+
+        Everything recorded before the failure survives, and the payload's own
+        fields win: a later failure must not be overwritten by an earlier value,
+        and a recorded diagnostic must not be replaced by an empty one.
+        """
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
-            for key in ("build_mode", "build_seconds"):
-                if key in self.metadata:
-                    metadata.setdefault(key, self.metadata[key])
+            merged = dict(self.metadata)
+            for key, value in metadata.items():
+                if value is None and merged.get(key) is not None:
+                    continue
+                merged[key] = value
+            result["metadata"] = merged
         return result
 
     def _compiled(self, *, correctness: bool) -> dict[str, Any]:
@@ -269,6 +282,9 @@ class SampleEvaluator:
                 cmake_arch=self.req.cmake_arch,
                 timeout_s=self.req.build_timeout,
             )
+            # The build produced a library: for Ascend C that is the compile
+            # step, and a later load failure still reports compiled=True.
+            self.compiled = True
             load_custom_op(self.so_path, asc_source)
         except (BuildError, OSError) as exc:
             return fail_result(compilation_error=str(exc))
@@ -384,6 +400,7 @@ class SampleEvaluator:
                 backend=backend,
                 **runtime_failure(exc, stage="first_call"),
             )
+        self.compiled = True
         self.metadata["first_call_seconds"] = round(seconds, 3)
         # Diagnostic only: a first call can succeed and still produce wrong
         # output, which the compiled flag cannot express. Never fails a sample.
@@ -412,7 +429,7 @@ class SampleEvaluator:
             self.model_new_cls = custom_globals["ModelNew"]
         except Exception as exc:
             return fail_result(
-                compiled=True, runtime_error=f"module load failed: {exc!r}"
+                compiled=self.compiled, runtime_error=f"module load failed: {exc!r}"
             )
         task_tolerance = self.ref_globals.get("TOLERANCE")
         self.atol, self.rtol = resolve_tolerances(
@@ -440,7 +457,7 @@ class SampleEvaluator:
             self.new_model.eval()
         except Exception as exc:
             return fail_result(
-                compiled=True,
+                compiled=self.compiled,
                 runtime_error=f"candidate model init failed: {exc!r}",
                 failure_stage="execution",
                 **runtime_failure(exc, stage="model_init"),
@@ -518,7 +535,16 @@ class SampleEvaluator:
     def _run_hidden_distributions(self) -> dict[str, Any] | None:
         """Gate on four value transforms; timing keeps the original draw."""
         seed_torch(self.req.seed)
-        raw_inputs = self.get_inputs()
+        try:
+            raw_inputs = self.get_inputs()
+        except Exception as exc:
+            # The gate cannot run at all. Fail it, and keep the correctness
+            # verdict and the diagnostics already recorded.
+            self.metadata["hidden_passed"] = []
+            self.metadata["runtime_error"] = f"hidden inputs: {exc!r}"
+            self.metadata["failure_stage"] = "execution"
+            self.metadata.update(runtime_failure(exc, stage="hidden_inputs"))
+            return self._compiled(correctness=False)
         passed: list[str] = []
         with self.torch.no_grad():
             for name, scale in HIDDEN_DISTRIBUTIONS:
@@ -540,8 +566,15 @@ class SampleEvaluator:
         raw_inputs: Sequence[Any],
     ) -> dict[str, Any] | None:
         """Return an error mapping when one hidden transform fails."""
-        raw = perturb_floating_inputs(raw_inputs, scale)
-        inputs = [self._process_input(item) for item in raw]
+        try:
+            raw = perturb_floating_inputs(raw_inputs, scale)
+            inputs = [self._process_input(item) for item in raw]
+        except Exception as exc:
+            return {
+                "runtime_error": f"hidden {name}: input preparation failed: {exc!r}",
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_inputs"),
+            }
         self.torch.npu.synchronize(device=self.req.device)
         try:
             ref_out = self._run_reference(inputs, raw, 0, stage=f"hidden {name}")
@@ -703,7 +736,15 @@ class SampleEvaluator:
         """
         if self.backend is not Backend.PYASC or self.runtime is None:
             return
-        inputs = [self._process_input(item) for item in self.get_inputs()]
+        # Preparing the cross-check inputs can fail on its own, and it must
+        # not escape: correctness is already established and only the
+        # performance numbers are in question.
+        try:
+            inputs = [self._process_input(item) for item in self.get_inputs()]
+        except Exception as exc:
+            self._discard_timing(f"timing input preparation failed: {exc!r}")
+            self.metadata.update(runtime_failure(exc, stage="timing_inputs"))
+            return
         try:
             with self.torch.no_grad():
                 for _ in range(2):
