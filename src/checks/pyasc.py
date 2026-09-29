@@ -15,6 +15,7 @@ from .python_ast import (
     _TENSOR_COMPUTE_METHODS,
     Sink,
     WrapperSemantics,
+    _collect_module_scalars,
 )
 from .text import dedupe
 
@@ -833,96 +834,3 @@ def check_pyasc_sources(kernel_source: str, wrapper_source: str) -> list[str]:
     )
     violations.extend(check_pyasc_model_new(wrapper_source, facts))
     return dedupe(violations)
-
-
-def _is_scalar_expr(node: ast.AST, known: set[str]) -> bool:
-    """Return True for literals and arithmetic over already-known scalars."""
-    if isinstance(node, ast.Constant):
-        return True
-    if isinstance(node, ast.Name):
-        return node.id in known
-    if isinstance(node, ast.UnaryOp):
-        return _is_scalar_expr(node.operand, known)
-    if isinstance(node, ast.BinOp):
-        return _is_scalar_expr(node.left, known) and _is_scalar_expr(node.right, known)
-    # `_GOOD = [0]` is a mutable scalar slot used to remember which variant
-    # worked; a container of tensors never qualifies, so this cannot launder
-    # tensor math.
-    if isinstance(node, (ast.Tuple, ast.List)):
-        return all(_is_scalar_expr(element, known) for element in node.elts)
-    return False
-
-
-def _touches_torch(node: ast.AST) -> bool:
-    """Return True when a body mentions torch or NumPy."""
-    for inner in ast.walk(node):
-        if isinstance(inner, ast.Name) and inner.id in {
-            "torch",
-            "torch_npu",
-            "numpy",
-            "np",
-        }:
-            return True
-        if isinstance(inner, ast.Attribute):
-            root: ast.AST = inner
-            while isinstance(root, ast.Attribute):
-                root = root.value
-            if isinstance(root, ast.Name) and root.id in {
-                "torch",
-                "torch_npu",
-                "numpy",
-                "np",
-            }:
-                return True
-    return False
-
-
-def _collect_module_scalars(tree: ast.Module) -> set[str]:
-    """Return module-level names a host function may treat as plain values.
-
-    Constants and torch-free helpers are defined beside the launcher, but a
-    launcher is checked in isolation, where they would look like unknown
-    non-scalars and make legal host shape arithmetic look like tensor compute.
-    Constant definitions may chain (CHUNK = CORES * BLOCK_LEN), so the pass
-    repeats until it stops resolving new names. A helper or value that mentions
-    torch is excluded, so it cannot launder tensor math.
-    """
-    scalars: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and not _touches_torch(node):
-            scalars.add(node.name)
-    changed = True
-    while changed:
-        changed = False
-        for node in tree.body:
-            value = (
-                node.value
-                if isinstance(node, ast.AnnAssign)
-                else (node.value if isinstance(node, ast.Assign) else None)
-            )
-            if value is None or _touches_torch(value):
-                continue
-            targets = (
-                [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
-            )
-            # `H, W = 128, 256` binds one scalar per element, so both sides are
-            # unpacked instead of the assignment being skipped for its target.
-            if (
-                len(targets) == 1
-                and isinstance(targets[0], (ast.Tuple, ast.List))
-                and isinstance(value, (ast.Tuple, ast.List))
-                and len(targets[0].elts) == len(value.elts)
-            ):
-                if all(_is_scalar_expr(elt, scalars) for elt in value.elts):
-                    for element in targets[0].elts:
-                        if isinstance(element, ast.Name) and element.id not in scalars:
-                            scalars.add(element.id)
-                            changed = True
-                continue
-            if not _is_scalar_expr(value, scalars):
-                continue
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id not in scalars:
-                    scalars.add(target.id)
-                    changed = True
-    return scalars

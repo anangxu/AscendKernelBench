@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from .python_ast import Sink, WrapperSemantics
+import ast
+
+from .python_ast import Sink, WrapperSemantics, _collect_module_scalars
 from .rules import PatternRule, run_rules
 from .text import dedupe, prepare_python_source
 
@@ -121,7 +123,16 @@ def check_model_new(source: str, *, sink: Sink | None = None) -> list[str]:
     code = prepare_python_source(source)
     violations = run_rules(code, PYTHON_PATTERN_RULES)
     try:
-        violations.extend(WrapperSemantics(source, sink=sink).violations)
+        # Module-level value constants are shape bookkeeping; function names are
+        # not, so a helper call stays visible to the checker.
+        module_scalars = _collect_module_scalars(
+            ast.parse(code), include_functions=False
+        )
+        violations.extend(
+            WrapperSemantics(
+                source, sink=sink, module_scalars=module_scalars
+            ).violations
+        )
     except SyntaxError as exc:
         violations.append(f"model_new.py does not parse as Python: {exc}")
     return dedupe(violations)
