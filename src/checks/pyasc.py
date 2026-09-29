@@ -534,7 +534,11 @@ def check_kernel_launchers(facts: KernelFacts) -> list[str]:
                 ast.unparse(_module_of(node)),
                 sink=sink,
                 require_sink=name in facts.launchers,
-                scalar_arith=name in facts.launchers,
+                # Every host function that can reach a launch obeys the shape
+                # arithmetic rule, not only the one holding the subscript: a
+                # dispatcher is accepted for its call graph, so it must not
+                # become a place to compute on tensors.
+                scalar_arith=name in facts.launcher_entries,
                 module_scalars=facts.module_scalars,
             )
         except SyntaxError as exc:
@@ -645,6 +649,11 @@ def _is_scalar_expr(node: ast.AST, known: set[str]) -> bool:
         return _is_scalar_expr(node.operand, known)
     if isinstance(node, ast.BinOp):
         return _is_scalar_expr(node.left, known) and _is_scalar_expr(node.right, known)
+    # `_GOOD = [0]` is a mutable scalar slot used to remember which variant
+    # worked; a container of tensors never qualifies, so this cannot launder
+    # tensor math.
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_is_scalar_expr(element, known) for element in node.elts)
     return False
 
 

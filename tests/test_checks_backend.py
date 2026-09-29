@@ -397,6 +397,76 @@ def main() -> int:
         ),
         ALIASED_WRAPPER,
     )
+    # The shapes above are accepted for their call graph only. None of them may
+    # become a way to move tensor compute onto the host.
+    expect_rejected(
+        "host compute behind a dict-selected kernel is still rejected",
+        DICT_KERNEL.replace(
+            "    _KERNELS[MODE][1, rt.current_stream()](x, y, x.numel())",
+            "    total = x * 2\n"
+            "    _KERNELS[MODE][1, rt.current_stream()](x, y, total)",
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_dict(A, B)"),
+    )
+    expect_rejected(
+        "host compute behind a launcher alias is still rejected",
+        ALIASED_KERNEL.replace(
+            "def run(",
+            "def run_impl(x: torch.Tensor, y: torch.Tensor) -> None:\n"
+            "    total = torch.abs(x).numel()\n"
+            "    a_kernel[1, rt.current_stream()](x, y, total)\n\n\n"
+            "run = run_impl\n\n\n"
+            "def run(",
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_rejected(
+        "host compute behind a launcher dispatch is still rejected",
+        DISPATCH_KERNEL.replace(
+            "    for index in range(len(_LAUNCHERS)):",
+            "    total = x * 2\n    for index in range(len(_LAUNCHERS)):",
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.dispatch(A, B)"),
+    )
+    expect_rejected(
+        "a metadata call cannot launder tensor arithmetic",
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    total = (x * 2).numel()\n"
+            "    chosen[1, rt.current_stream()](x, y, total)",
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_rejected(
+        "a dispatch collection of tensors is still rejected",
+        DISPATCH_KERNEL.replace(
+            "_LAUNCHERS = (_launch_a, _launch_b)", "_LAUNCHERS = (y, y)"
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.dispatch(A, B)"),
+    )
+    expect_clean(
+        "a module-level list of scalars stays scalar inside a dispatcher",
+        Backend.PYASC,
+        DISPATCH_KERNEL.replace("def dispatch(", "_GOOD = [0]\n\n\ndef dispatch(").replace(
+            "    for index in range(len(_LAUNCHERS)):",
+            "    index = _GOOD[0]\n"
+            "    while index < len(_LAUNCHERS):\n"
+            "        index = index + 1\n"
+            "    for index in range(len(_LAUNCHERS)):",
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.dispatch(A, B)"),
+    )
+    expect_rejected(
+        "a module-level list holding a tensor is not scalar",
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    span = _BAD[0] + 1\n    chosen[1, rt.current_stream()](x, y, span)",
+        ).replace(
+            "_KERNELS = (a_kernel, b_kernel)",
+            "_KERNELS = (a_kernel, b_kernel)\n_BAD = [x]",
+        ),
+        ALIASED_WRAPPER,
+    )
     expect_rejected("wrapper without ModelNew", add_kernel, "import torch\n")
     expect_rejected(
         "vendor native op shortcut",

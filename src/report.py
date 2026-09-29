@@ -43,6 +43,13 @@ def sample_status_label(result: dict[str, object]) -> tuple[str, str]:
     return status.style, status.label
 
 
+def _counts_text(counts: object) -> str:
+    """Return a compact 'name count' list for a summary counter map."""
+    if not isinstance(counts, dict) or not counts:
+        return "0"
+    return ", ".join(f"{name} {count}" for name, count in counts.items())
+
+
 def eval_result_lines(result: dict[str, object]) -> tuple[str, list[str]]:
     """Return the Rich style and summary lines for one evaluation result."""
     from .score import sample_speedup
@@ -143,6 +150,17 @@ def print_eval_report(
     table.add_row(
         "unsupported operator (DSL)",
         str(summary.get("unsupported_operator", 0)),
+    )
+    # Runtime failures by exception class and by stage that raised them. Shown
+    # even when empty: the class names a symptom, not a culprit, so the reader
+    # sees what happened without the report assigning blame.
+    table.add_row(
+        "runtime failures (class)",
+        _counts_text(summary.get("runtime_error_classes")),
+    )
+    table.add_row(
+        "runtime failures (stage)",
+        _counts_text(summary.get("runtime_error_stages")),
     )
     for key, value in summary["fast_p"].items():
         table.add_row(key, f"{value:.3f}")
