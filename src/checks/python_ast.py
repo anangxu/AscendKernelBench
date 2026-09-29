@@ -182,7 +182,16 @@ _SCALAR_BUILTINS = {
     "bool",
     "repr",
 }
-_SCALAR_METHODS = {"numel", "nelement", "dim", "size", "item", "__len__"}
+_SCALAR_METHODS = {
+    "numel",
+    "nelement",
+    "dim",
+    "size",
+    "item",
+    "element_size",
+    "bit_length",
+    "__len__",
+}
 _ARITH_OPS = (
     ast.Add,
     ast.Sub,
@@ -423,8 +432,9 @@ class WrapperSemantics(ast.NodeVisitor):
             unwrap_subscript: Treat kernel_fn[i](...) as a call of
                 kernel_fn, which is how a pyasc kernel is launched.
         """
-        if unwrap_subscript and isinstance(node, ast.Subscript):
-            node = node.value
+        if unwrap_subscript:
+            while isinstance(node, ast.Subscript):
+                node = node.value
         if isinstance(node, ast.Name):
             return self.aliases.get(node.id, node.id)
         if isinstance(node, ast.Attribute):

@@ -33,7 +33,12 @@ from .compare import (
     snapshot_inputs,
     tensor_nbytes,
 )
-from .eval_result import compiled_result, eval_protocol_metadata, fail_result
+from .eval_result import (
+    compiled_result,
+    eval_protocol_metadata,
+    fail_result,
+    runtime_failure,
+)
 from .pyasc_runtime import (
     PyAscError,
     PyAscJITError,
@@ -330,6 +335,7 @@ class SampleEvaluator:
                 compilation_error=f"input preparation failed: {exc!r}",
                 failure_stage="execution",
                 backend=backend,
+                **runtime_failure(exc, stage="input_preparation"),
             )
         # Reject before anything casts: move_value_to_device turns every
         # floating tensor into the configured precision, which would hide a
@@ -344,6 +350,7 @@ class SampleEvaluator:
                     compilation_error=f"input preparation failed: {exc!r}",
                     failure_stage="execution",
                     backend=backend,
+                    **runtime_failure(exc, stage="input_preparation"),
                 )
             # Backstop on the tensors the kernel is actually handed.
             unsupported = self._unsupported_pyasc_dtypes(inputs)
@@ -375,6 +382,7 @@ class SampleEvaluator:
                 compilation_error=f"pyasc first call failed: {exc!r}",
                 failure_stage="execution",
                 backend=backend,
+                **runtime_failure(exc, stage="first_call"),
             )
         self.metadata["first_call_seconds"] = round(seconds, 3)
         # Diagnostic only: a first call can succeed and still produce wrong
@@ -434,6 +442,8 @@ class SampleEvaluator:
             return fail_result(
                 compiled=True,
                 runtime_error=f"candidate model init failed: {exc!r}",
+                failure_stage="execution",
+                **runtime_failure(exc, stage="model_init"),
             )
         try:
             seed_torch(self.req.seed)
@@ -537,7 +547,9 @@ class SampleEvaluator:
             ref_out = self._run_reference(inputs, raw, 0, stage=f"hidden {name}")
         except Exception as exc:
             return {
-                "runtime_error": (f"hidden {name}: reference runtime error: {exc!r}")
+                "runtime_error": (f"hidden {name}: reference runtime error: {exc!r}"),
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_reference"),
             }
         ref_snapshot = snapshot_inputs(inputs)
         try:
@@ -545,7 +557,9 @@ class SampleEvaluator:
             self.torch.npu.synchronize(device=self.req.device)
         except Exception as exc:
             return {
-                "runtime_error": (f"hidden {name}: candidate runtime error: {exc!r}")
+                "runtime_error": (f"hidden {name}: candidate runtime error: {exc!r}"),
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_candidate"),
             }
         if inputs_were_mutated(inputs, ref_snapshot):
             return {"runtime_error": f"hidden {name}: candidate mutated its inputs"}
@@ -577,6 +591,8 @@ class SampleEvaluator:
             return fail_result(
                 compiled=True,
                 runtime_error=(f"trial {trial}: candidate runtime error: {exc!r}"),
+                failure_stage="execution",
+                **runtime_failure(exc, stage="candidate_trial"),
             )
         if inputs_were_mutated(inputs, ref_snapshot):
             return fail_result(
@@ -796,6 +812,7 @@ class SampleEvaluator:
             )
         except Exception as exc:
             self.metadata["runtime_error"] = f"timing failed: {exc!r}"
+            self.metadata.update(runtime_failure(exc, stage="timing"))
 
     ################################# TIMING #################################
 
@@ -823,6 +840,7 @@ class SampleEvaluator:
                 return self.metadata
         except Exception as exc:
             self.metadata["runtime_error"] = f"post-timing re-check failed: {exc!r}"
+            self.metadata.update(runtime_failure(exc, stage="post_timing_recheck"))
             return self.metadata
         return None
 

@@ -116,7 +116,8 @@ and the runnable probes are in `experiments/pyasc_device_probes/`:
   result must be waited on with the vector event (`MTE2_V` in, `V_MTE3` out),
   and a loop that reuses one buffer must also keep the previous reader finished
   before overwriting it. Scope, counts and the open questions are in
-  `docs/reference/pyasc-device-evidence.md`.
+  `docs/reference/pyasc-device-evidence.md`; whether the compiler should insert
+  that dependency on its own is an open question.
 * The bundled reduction example accepts only shapes it addresses exactly: cols
   must be whole 32-byte blocks (8..64 fp32) and rows must split into whole
   8-row blocks per core. It raises ValueError otherwise, because a column count
@@ -169,6 +170,16 @@ a wrapper that calls an aliased launcher is accepted while a launcher that
 never launches is rejected. Host code may allocate, compute shapes, move data,
 and launch; tensor compute outside the device kernels is rejected, including
 when it is hidden inside a host helper.
+
+A kernel or a launcher may also be chosen at run time, which the call graph
+resolves rather than rejecting: a module-level tuple, list or dict of kernels
+or launchers, a module-level alias of a launcher (`run = softsign_launch`), and
+the selector subscript in `_KERNELS[mode][cores, stream](...)`. Generated
+samples use all of those shapes. A subscripted collection that holds no kernel
+or launcher is still rejected, as is an alias of a helper that never launches.
+Host-side shape arithmetic keeps counting metadata calls
+(`numel`, `element_size`, `bit_length`, `x.shape`) as scalars; arithmetic on
+tensor values stays rejected.
 
 ## Checking one candidate without an NPU
 

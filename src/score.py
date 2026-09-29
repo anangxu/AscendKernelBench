@@ -21,6 +21,11 @@ def _threshold_name(t: float) -> str:
     return f"fast_{t:g}"
 
 
+def _by_count(counts: Mapping[str, int]) -> dict[str, int]:
+    """Return a count map ordered by descending count, then by key."""
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
 def sample_speedup(sample: Mapping[str, Any]) -> float | None:
     """Return speedup (ref mean / kernel mean), or None if unusable.
 
@@ -124,6 +129,23 @@ def summarize_eval_results(
     timing_invalid = sum(
         1 for sample in all_samples if _meta(sample).get("timing_valid") is False
     )
+    # Runtime failures are classified generically, by exception class and by
+    # the stage that raised. The harness records what happened; it never
+    # decides on its own whether the model or the environment caused it, so
+    # these counters report both without moving a sample out of any rate.
+    runtime_classes: dict[str, int] = {}
+    runtime_stages: dict[str, int] = {}
+    for sample in all_samples:
+        meta = _meta(sample)
+        name = meta.get("runtime_error_class")
+        if name:
+            runtime_classes[str(name)] = runtime_classes.get(str(name), 0) + 1
+        elif meta.get("runtime_error"):
+            key = "unclassified"
+            runtime_classes[key] = runtime_classes.get(key, 0) + 1
+        stage = meta.get("runtime_error_stage")
+        if stage:
+            runtime_stages[str(stage)] = runtime_stages.get(str(stage), 0) + 1
     per_problem: dict[str, dict[str, Any]] = {}
     for problem_id, samples in eval_results.items():
         n = len(samples)
@@ -151,6 +173,8 @@ def summarize_eval_results(
         ),
         "unsupported_operator": unsupported_operator,
         "timing_invalid": timing_invalid,
+        "runtime_error_classes": _by_count(runtime_classes),
+        "runtime_error_stages": _by_count(runtime_stages),
         "fast_p": fast_p(all_samples),
         "geometric_mean_speedup_correct_only": geometric_mean_speedup(all_samples),
         "mean_sol_score": mean_sol_score(all_samples),

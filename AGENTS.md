@@ -126,7 +126,8 @@ CLI facts worth remembering:
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
 | `docs/reference/pyasc-device-evidence.md` | The measured pyasc facts behind the guide, with versions, commands, inputs, observed outputs, and the boundary of each claim. |
 | `docs/reference/pyasc-evaluation-report.md` | The first end-to-end pyasc evaluation: configuration, results, the framework fixes it forced, and what the numbers do not cover. |
-| `experiments/pyasc_device_probes/` | Device-only probes that re-measure those facts. Standalone scripts, not part of `tests/`, imported by nothing in `src/`. |
+| `experiments/pyasc_device_probes/` | Device-only probes that re-measure those facts. Standalone scripts, imported by nothing in `src/`. |
+| `tests/` | No-device suites and their fixtures: backend selection, evaluation wiring, and the static checks. Run as `python tests/<file>.py`; they need neither a device nor pyasc. |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 
 Module boundaries are strict; `docs/reference/architecture.md` has the full

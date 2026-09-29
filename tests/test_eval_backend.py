@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import eval_device  # noqa: E402
 from src.backend import Backend  # noqa: E402
 from src.eval_device import DeviceEvalRequest, SampleEvaluator  # noqa: E402
+from src.eval_result import runtime_failure  # noqa: E402
+from src.score import summarize_eval_results  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -567,6 +569,63 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
     )
 
 
+def test_runtime_failure_is_classified_without_assigning_blame() -> None:
+    """A runtime failure keeps its class, stage, and message summary."""
+    exc = RuntimeError("NPU out of memory. Tried to allocate 6.00 GiB " + "x" * 400)
+    classified = runtime_failure(exc, stage="candidate_trial")
+    check(
+        "the exception class is recorded",
+        classified.get("runtime_error_class") == "RuntimeError",
+        repr(classified),
+    )
+    check(
+        "the stage that raised it is recorded",
+        classified.get("runtime_error_stage") == "candidate_trial",
+        repr(classified),
+    )
+    summary = str(classified.get("runtime_error_summary"))
+    check("the message is summarized on one line", "\n" not in summary, repr(summary))
+    check("the summary is bounded", len(summary) <= 240, repr(len(summary)))
+    check(
+        "the classification never decides who is at fault",
+        "limitation_scope" not in classified and "failure_stage" not in classified,
+        repr(sorted(classified)),
+    )
+
+    oom = {
+        "compiled": True,
+        "correctness": False,
+        "metadata": {
+            "runtime_error": "trial 1: candidate runtime error: OutOfMemoryError()",
+            **runtime_failure(RuntimeError("out of memory"), stage="candidate_trial"),
+        },
+    }
+    legacy = {
+        "compiled": True,
+        "correctness": False,
+        "metadata": {"runtime_error": "trial 1: candidate runtime error"},
+    }
+    good = {"compiled": True, "correctness": True, "metadata": {"reference": "npu"}}
+    aggregated = summarize_eval_results({"level1/1_x": [oom, legacy, good]})
+    check(
+        "classes are counted generically",
+        aggregated.get("runtime_error_classes") == {"RuntimeError": 1, "unclassified": 1},
+        repr(aggregated.get("runtime_error_classes")),
+    )
+    check(
+        "stages are counted",
+        aggregated.get("runtime_error_stages") == {"candidate_trial": 1},
+        repr(aggregated.get("runtime_error_stages")),
+    )
+    check(
+        "the scoring denominator is unchanged",
+        aggregated.get("total_samples") == 3
+        and aggregated.get("correct") == 1
+        and aggregated["fast_p"]["fast_0"] == 1 / 3,
+        repr((aggregated.get("total_samples"), aggregated.get("correct"))),
+    )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -586,6 +645,7 @@ def main() -> int:
     test_pyasc_timing_validation()
     test_invalid_timing_is_excluded_from_performance()
     test_unsupported_dtype_is_reported_not_casted()
+    test_runtime_failure_is_classified_without_assigning_blame()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")
