@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import eval_device  # noqa: E402
 from src.backend import Backend  # noqa: E402
 from src.eval_device import DeviceEvalRequest, SampleEvaluator  # noqa: E402
-from src.eval_result import runtime_failure  # noqa: E402
+from src.eval_result import fail_result, runtime_failure  # noqa: E402
 from src.score import summarize_eval_results  # noqa: E402
 
 FAILURES: list[str] = []
@@ -928,6 +928,303 @@ def test_hidden_input_preparation_failure_is_classified() -> None:
             )
 
 
+FAKE_MODEL_NEW = """\
+class ModelNew:
+    def __init__(self):
+        pass
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def eval(self):
+        return self
+
+    def parameters(self):
+        return []
+
+    def __call__(self, *args, **kwargs):
+        return "same"
+"""
+
+# The task source controls which get_inputs() call fails, so the composite test
+# can fail the timing draw while the earlier draws and the later re-check work.
+FAKE_TASK = """\
+class OutOfMemoryError(RuntimeError):
+    pass
+
+
+class Model:
+    def __init__(self):
+        pass
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def eval(self):
+        return self
+
+    def __call__(self, *args, **kwargs):
+        return "same"
+
+
+_CALLS = {{"n": 0}}
+
+
+def get_inputs():
+    _CALLS["n"] += 1
+    if _CALLS["n"] == {fail_at}:
+        raise OutOfMemoryError("tried to allocate 6.00 GiB")
+    return []
+
+
+def get_init_inputs():
+    return []
+"""
+
+
+class _Item:
+    """Minimal stand-in for a one-element tensor's item()."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def item(self) -> object:
+        return self._value
+
+
+class RunFakes:
+    """Fake torch modules and device calls around one real run() execution.
+
+    Device work is simulated; the evaluator's control flow, its exception
+    handling and its result assembly stay the real code.
+    """
+
+    def __init__(self, evaluator: SampleEvaluator, *, recheck_ok: bool) -> None:
+        self.evaluator = evaluator
+        self.recheck_ok = recheck_ok
+        self.calls = {"outputs": 0}
+        self._modules: dict[str, object] = {}
+        self._attrs: dict[str, object] = {}
+
+    def _patch(self, name: str, value: object) -> None:
+        self._attrs[name] = getattr(eval_device, name)
+        setattr(eval_device, name, value)
+
+    def _fake_time(self) -> None:
+        ev = self.evaluator
+        ev.runtime = 2.0
+        ev.runtime_stats = {"mean": 2.0}
+        ev.ref_runtime = 4.0
+        ev.ref_runtime_stats = {"mean": 4.0}
+        ev.metadata["speedup"] = 0.5
+        ev.metadata["sol_score"] = 0.25
+        ev.metadata["sol_bound_ms"] = 4.0
+        ev.metadata["bytes_moved"] = 1024
+
+    def __enter__(self) -> "RunFakes":
+        import contextlib
+        import sys
+
+        for name in ("torch", "torch_npu"):
+            self._modules[name] = sys.modules.get(name)
+        sys.modules["torch"] = SimpleNamespace(
+            npu=SimpleNamespace(
+                set_device=lambda *a, **k: None,
+                synchronize=lambda *a, **k: None,
+                manual_seed=lambda *a, **k: None,
+            ),
+            device=lambda spec: spec,
+            float32="float32",
+            no_grad=lambda: contextlib.nullcontext(),
+            randint=lambda *a, **k: _Item(7),
+        )
+        sys.modules["torch_npu"] = SimpleNamespace()
+
+        for name, value in (
+            ("prepare_cache_dir", lambda path: None),
+            ("import_asc", lambda: SimpleNamespace()),
+            ("configure_platform", lambda asc, index: "Ascend910B4"),
+            ("load_kernel_module", lambda sample_path, kernel_path: SimpleNamespace()),
+            ("time_first_call", lambda fn: (0.01, fn())),
+            (
+                "runtime_facts",
+                lambda path: {"pyasc_version": "1.1.1", "platform": "Ascend910B4"},
+            ),
+            ("npu_runtime_metadata", lambda device: {}),
+            ("seed_torch", lambda value: None),
+            ("max_abs_diff", lambda ref, new: 0.0),
+            ("snapshot_inputs", lambda inputs: []),
+            ("inputs_were_mutated", lambda inputs, snapshot: False),
+        ):
+            self._patch(name, value)
+
+        ev = self.evaluator
+        ev._process_input = lambda value: value
+        ev._run_reference = lambda inputs, raw, trial, stage=None: "same"
+
+        def outputs_ok(ref: object, new: object) -> bool:
+            self.calls["outputs"] += 1
+            # Only the post-timing re-check runs after the timing was dropped,
+            # so this keys the re-check's verdict to the state it observes.
+            if ev.metadata.get("timing_valid") is False:
+                return self.recheck_ok
+            return True
+
+        ev._outputs_ok = outputs_ok
+        ev._time_both_models = self._fake_time
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        import sys
+
+        for name, value in self._attrs.items():
+            setattr(eval_device, name, value)
+        for name, value in self._modules.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+        return False
+
+
+def _composite_sample(tmp: str, fail_at: int) -> SampleEvaluator:
+    """Build an evaluator whose task source fails the given get_inputs call."""
+    sample = Path(tmp)
+    (sample / "kernel.py").write_text("# stub kernel\n")
+    (sample / "model_new.py").write_text(FAKE_MODEL_NEW)
+    request = make_request(sample, "pyasc").model_copy(
+        update={"measure_performance": True, "task_py": FAKE_TASK.format(fail_at=fail_at)}
+    )
+    return SampleEvaluator(request)
+
+
+def test_run_keeps_correctness_when_timing_inputs_fail() -> None:
+    """A timing-input failure costs the performance data and nothing else."""
+    # Calls 1..3 are the warm-up, the correctness trial and the hidden gate;
+    # call 4 is the timing draw and fails; call 5 is the post-timing re-check,
+    # which must therefore still run.
+    for recheck_ok, label in ((True, "a passing re-check"), (False, "a failing re-check")):
+        with tempfile.TemporaryDirectory() as tmp:
+            evaluator = _composite_sample(tmp, 4)
+            with RunFakes(evaluator, recheck_ok=recheck_ok) as fakes:
+                result = evaluator.run()
+            metadata = result["metadata"]
+            calls = evaluator.ref_globals["_CALLS"]["n"]
+            check(
+                f"run with {label}: the re-check drew fresh inputs",
+                calls == 5,
+                repr(calls),
+            )
+            # Seven comparisons: the warm-up's first-call diagnostic, the
+            # correctness trial, the four hidden transforms, and the
+            # post-timing re-check. Without the re-check this would be six.
+            check(
+                f"run with {label}: the re-check compared outputs",
+                fakes.calls["outputs"] == 7,
+                repr(fakes.calls),
+            )
+            check(
+                f"run with {label}: the sample stays compiled",
+                result["compiled"] is True,
+                repr(result["compiled"]),
+            )
+            check(
+                f"run with {label}: timing is invalid with a reason",
+                metadata.get("timing_valid") is False
+                and "input preparation" in str(metadata.get("timing_invalid_reason")),
+                repr(metadata.get("timing_invalid_reason")),
+            )
+            check(
+                f"run with {label}: the timing failure is classified",
+                metadata.get("runtime_error_class") == "OutOfMemoryError"
+                and metadata.get("runtime_error_stage") == "timing_inputs",
+                repr(
+                    (
+                        metadata.get("runtime_error_class"),
+                        metadata.get("runtime_error_stage"),
+                    )
+                ),
+            )
+            check(
+                f"run with {label}: no runtime survives",
+                result["runtime"] is None
+                and result["runtime_stats"] is None
+                and result["ref_runtime"] is None
+                and result["ref_runtime_stats"] is None,
+                repr((result["runtime"], result["ref_runtime"])),
+            )
+            check(
+                f"run with {label}: no speedup or SOL survives",
+                all(
+                    key not in metadata
+                    for key in ("speedup", "sol_score", "sol_bound_ms", "bytes_moved")
+                ),
+                repr(sorted(metadata)),
+            )
+            if recheck_ok:
+                check(
+                    f"run with {label}: correctness survives the timing failure",
+                    result["correctness"] is True,
+                    repr(result["correctness"]),
+                )
+            else:
+                check(
+                    f"run with {label}: a failing re-check fails the sample",
+                    result["correctness"] is False,
+                    repr(result["correctness"]),
+                )
+                check(
+                    f"run with {label}: the re-check failure is recorded",
+                    "re-check" in str(metadata.get("correctness_error")),
+                    repr(metadata.get("correctness_error")),
+                )
+            check(
+                f"run with {label}: diagnostics are kept",
+                isinstance(metadata.get("first_call_seconds"), float)
+                and metadata.get("first_call_correct") is True
+                and metadata.get("pyasc_version") == "1.1.1",
+                repr(
+                    (
+                        metadata.get("first_call_seconds"),
+                        metadata.get("first_call_correct"),
+                        metadata.get("pyasc_version"),
+                    )
+                ),
+            )
+
+
+def test_metadata_merge_keeps_diagnostics_and_prefers_failures() -> None:
+    """A None on the failure side keeps a diagnostic; a real error wins."""
+    evaluator = SampleEvaluator(make_request(Path("/nonexistent"), "pyasc"))
+    evaluator.metadata["first_call_seconds"] = 0.5
+    evaluator.metadata["failure_stage"] = "static_check"
+    keep = fail_result(runtime_error="trial 0: boom")
+    keep["metadata"]["first_call_seconds"] = None
+    merged = evaluator._with_build_facts(keep)["metadata"]
+    check(
+        "a None on the failure side does not erase a diagnostic",
+        merged.get("first_call_seconds") == 0.5,
+        repr(merged.get("first_call_seconds")),
+    )
+    check(
+        "a stale stage survives when the failure does not set one",
+        merged.get("failure_stage") == "static_check",
+        repr(merged.get("failure_stage")),
+    )
+    wins = fail_result(runtime_error="trial 0: boom", failure_stage="execution")
+    merged_wins = evaluator._with_build_facts(wins)["metadata"]
+    check(
+        "a concrete error field on the failure side wins",
+        merged_wins.get("failure_stage") == "execution",
+        repr(merged_wins.get("failure_stage")),
+    )
+    check(
+        "the failure's runtime_error is the one kept",
+        merged_wins.get("runtime_error") == "trial 0: boom",
+        repr(merged_wins.get("runtime_error")),
+    )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -952,6 +1249,8 @@ def main() -> int:
     test_construct_models_reports_the_compile_state()
     test_late_trial_failure_keeps_diagnostics()
     test_hidden_input_preparation_failure_is_classified()
+    test_metadata_merge_keeps_diagnostics_and_prefers_failures()
+    test_run_keeps_correctness_when_timing_inputs_fail()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")
