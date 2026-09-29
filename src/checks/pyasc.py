@@ -40,6 +40,8 @@ class KernelFacts:
     kernel_modules: set[str] = field(default_factory=set)
     imported_kernels: set[str] = field(default_factory=set)
     kernel_collections: dict[str, set[str]] = field(default_factory=dict)
+    function_collections: dict[str, set[str]] = field(default_factory=dict)
+    function_aliases: dict[str, str] = field(default_factory=dict)
     violations: list[str] = field(default_factory=list)
 
     def sink_names(self) -> set[str]:
@@ -132,6 +134,10 @@ def _launch_base(node: ast.AST, module_names: set[str]) -> tuple[str, str] | Non
     A bare name gives (name, ""); kernel.name and kernel["name"] give
     ("kernel", "name"). Anything else returns None.
     """
+    while isinstance(node, ast.Subscript):
+        # _KERNELS[mode][cores](...) leaves a selector subscript under the
+        # launch subscript, so resolve through the selectors to the root.
+        node = node.value
     if isinstance(node, ast.Name):
         return node.id, ""
     path = _resolve(node)
@@ -255,8 +261,18 @@ def check_kernel_source(source: str) -> KernelFacts:
     for node in module_level:
         if _is_jit_function(node):
             facts.jit_functions[node.name] = node
-    # Needs the kernel names, so it runs after they are collected.
-    facts.kernel_collections = _kernel_collections(tree, set(facts.jit_functions))
+    # Needs the kernel names, so it runs after they are collected. Both maps
+    # are filled the same way; one is restricted to device kernels, the other
+    # also covers host launchers, which a dispatcher may also collect.
+    facts.kernel_collections = _function_collections(tree, set(facts.jit_functions))
+    facts.function_collections = _function_collections(
+        tree, set(facts.jit_functions) | {node.name for node in module_level}
+    )
+    # `run = softsign_launch` publishes a launcher under a second name, which
+    # is the name model_new.py imports.
+    facts.function_aliases = _function_aliases(
+        tree, {node.name for node in module_level}
+    )
 
     if not facts.jit_functions:
         facts.violations.append(
@@ -326,6 +342,8 @@ def _resolve_kernel_aliases(
         if name in jit_names:
             resolved.add(name)
         resolved |= aliases.get(name, set())
+        # _KERNELS[mode][cores](...) subscripts the collection itself.
+        resolved |= (collections or {}).get(name, set())
     return resolved & jit_names
 
 
@@ -365,6 +383,11 @@ def _kernel_aliases(
 
 def _kernel_collections(tree: ast.Module, jit_names: set[str]) -> dict[str, set[str]]:
     """Return module-level names holding only @asc.jit kernels."""
+    return _function_collections(tree, jit_names)
+
+
+def _function_collections(tree: ast.Module, names: set[str]) -> dict[str, set[str]]:
+    """Return module-level names holding only functions named in names."""
     collections: dict[str, set[str]] = {}
     changed = True
     while changed:
@@ -375,11 +398,30 @@ def _kernel_collections(tree: ast.Module, jit_names: set[str]) -> dict[str, set[
             target = node.targets[0]
             if not isinstance(target, ast.Name):
                 continue
-            names = _names_of_kernels(node.value, jit_names, {}, collections)
-            if names and not names <= collections.get(target.id, set()):
-                collections[target.id] = collections.get(target.id, set()) | names
+            found = _names_of_kernels(node.value, names, {}, collections)
+            if found and not found <= collections.get(target.id, set()):
+                collections[target.id] = collections.get(target.id, set()) | found
                 changed = True
     return collections
+
+
+def _function_aliases(tree: ast.Module, names: set[str]) -> dict[str, str]:
+    """Return module-level names bound straight to a function of this file."""
+    aliases: dict[str, str] = {}
+    changed = True
+    while changed:
+        changed = False
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target, value = node.targets[0], node.value
+            if not isinstance(target, ast.Name) or not isinstance(value, ast.Name):
+                continue
+            bound = aliases.get(value.id, value.id)
+            if bound in names and aliases.get(target.id) != bound:
+                aliases[target.id] = bound
+                changed = True
+    return aliases
 
 
 def _names_of_kernels(
@@ -388,7 +430,11 @@ def _names_of_kernels(
     aliases: dict[str, set[str]],
     collections: dict[str, set[str]] | None = None,
 ) -> set[str]:
-    """Return the kernels an expression names, directly or through aliases."""
+    """Return the kernels an expression names, directly or through aliases.
+
+    Callers that pass host function names instead of @asc.jit names get the
+    same treatment, which is how a launcher collection is recognised.
+    """
     collections = collections or {}
     if isinstance(value, ast.Name):
         if value.id in jit_names:
@@ -403,7 +449,20 @@ def _names_of_kernels(
         for element in value.elts:
             found |= _names_of_kernels(element, jit_names, aliases, collections)
         return found
+    if isinstance(value, ast.Dict):
+        found = set()
+        for element in value.values:
+            if element is not None:
+                found |= _names_of_kernels(element, jit_names, aliases, collections)
+        return found
     return set()
+
+
+def _call_root(func: ast.AST) -> str | None:
+    """Return the name a call target is rooted at, through launch subscripts."""
+    while isinstance(func, ast.Subscript):
+        func = func.value
+    return func.id if isinstance(func, ast.Name) else None
 
 
 def _reachable_launchers(facts: KernelFacts) -> dict[str, ast.FunctionDef]:
@@ -414,17 +473,24 @@ def _reachable_launchers(facts: KernelFacts) -> dict[str, ast.FunctionDef]:
     kernel. Grow the set until no further host function calls into it.
     """
     entries = dict(facts.launchers)
+    for alias, target in facts.function_aliases.items():
+        if target in entries and alias not in entries:
+            entries[alias] = entries[target]
     changed = True
     while changed:
         changed = False
         for name, node in facts.host_functions.items():
             if name in entries:
                 continue
-            called = {
-                call.func.id
-                for call in _iter_calls(node.body)
-                if isinstance(call.func, ast.Name)
-            }
+            called: set[str] = set()
+            for call in _iter_calls(node.body):
+                root = _call_root(call.func)
+                if root:
+                    called.add(root)
+            # A launcher that dispatches over a module-level tuple of launch
+            # variants reaches every launcher in that collection.
+            for root in tuple(called):
+                called |= facts.function_collections.get(root, set())
             if called & set(entries):
                 entries[name] = node
                 changed = True
@@ -451,8 +517,15 @@ def check_kernel_launchers(facts: KernelFacts) -> list[str]:
         # launcher routes compute through, and the message must be the pyasc
         # one rather than the Ascend C default.
         aliases = _kernel_aliases(node, set(jit), facts.kernel_collections)
+        # Routing compute through a module-level collection of kernels, or
+        # through another entry point that launches, still reaches the device.
+        direct = jit | frozenset(aliases) | frozenset(facts.kernel_collections)
+        direct |= frozenset(facts.launcher_entries)
+        for collection, members in facts.function_collections.items():
+            if members and members <= set(facts.launcher_entries):
+                direct |= {collection}
         sink = Sink(
-            direct=jit | frozenset(aliases),
+            direct=direct,
             attr_mode=frozenset(facts.kernel_modules),
             kind="kernel",
         )

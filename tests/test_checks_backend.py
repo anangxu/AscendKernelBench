@@ -166,6 +166,47 @@ class ModelNew(torch.nn.Module):
 """
 
 
+# Two shapes generated for real. A module-level dict of kernels picked by a
+# module-level mode string subscripts the collection before the launch
+# subscript; a dispatcher walks a module-level tuple of launch variants and
+# keeps the first that runs, which is how one generated matmul fell back
+# between two kernels.
+DICT_KERNEL = ALIASED_KERNEL.replace(
+    "_KERNELS = (a_kernel, b_kernel)",
+    '_KERNELS = {"a": a_kernel, "b": b_kernel}\nMODE = "a"',
+).replace(
+    """def run_collection(x: torch.Tensor, y: torch.Tensor) -> None:
+    for kernel in _KERNELS:
+        kernel[1, rt.current_stream()](x, y, x.numel())""",
+    """def run_dict(x: torch.Tensor, y: torch.Tensor) -> None:
+    _KERNELS[MODE][1, rt.current_stream()](x, y, x.numel())""",
+)
+
+DISPATCH_KERNEL = ALIASED_KERNEL.replace(
+    """def run_collection(x: torch.Tensor, y: torch.Tensor) -> None:
+    for kernel in _KERNELS:
+        kernel[1, rt.current_stream()](x, y, x.numel())""",
+    """def _launch_a(x: torch.Tensor, y: torch.Tensor) -> None:
+    a_kernel[1, rt.current_stream()](x, y, x.numel())
+
+
+def _launch_b(x: torch.Tensor, y: torch.Tensor) -> None:
+    b_kernel[1, rt.current_stream()](x, y, x.numel())
+
+
+_LAUNCHERS = (_launch_a, _launch_b)
+
+
+def dispatch(x: torch.Tensor, y: torch.Tensor) -> None:
+    for index in range(len(_LAUNCHERS)):
+        try:
+            _LAUNCHERS[index](x, y)
+            return
+        except Exception:
+            pass""",
+)
+
+
 def main() -> int:
     asc = (ROOT / "src/prompts/examples/001_elementwise_add/custom_op.asc").read_text()
     asc_wrapper = (
@@ -258,6 +299,101 @@ def main() -> int:
         ALIASED_KERNEL.replace(
             "    chosen[1, rt.current_stream()](x, y, x.numel())",
             "    chosen(x, y, x.numel())",
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_clean(
+        "a kernel picked from a module-level dict is accepted",
+        Backend.PYASC,
+        DICT_KERNEL,
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_dict(A, B)"),
+    )
+    expect_rejected(
+        "a subscripted collection holding no kernel is still rejected",
+        DICT_KERNEL.replace(
+            '"a": a_kernel, "b": b_kernel', '"a": _noop, "b": _noop'
+        ).replace(
+            "def run_dict(",
+            "def _noop(x: torch.Tensor, y: torch.Tensor) -> None:\n"
+            "    return None\n\n\n"
+            "def run_dict(",
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_dict(A, B)"),
+    )
+    expect_clean(
+        "a dispatcher over a module-level tuple of launchers is accepted",
+        Backend.PYASC,
+        DISPATCH_KERNEL,
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.dispatch(A, B)"),
+    )
+    expect_rejected(
+        "a dispatcher over helpers that never launch is still rejected",
+        DISPATCH_KERNEL.replace(
+            "_LAUNCHERS = (_launch_a, _launch_b)", "_LAUNCHERS = (_noop_a, _noop_b)"
+        ).replace(
+            "def dispatch(",
+            "def _noop_a(x: torch.Tensor, y: torch.Tensor) -> None:\n"
+            "    return None\n\n\n"
+            "def _noop_b(x: torch.Tensor, y: torch.Tensor) -> None:\n"
+            "    return None\n\n\n"
+            "def dispatch(",
+        ),
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.dispatch(A, B)"),
+    )
+    expect_clean(
+        "inline element_size() in shape arithmetic is accepted",
+        Backend.PYASC,
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    align = max(1, 32 // x.element_size())\n"
+            "    total = ((x.numel() + align - 1) // align) * align\n"
+            "    chosen[1, rt.current_stream()](x, y, total)",
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_rejected(
+        "tensor arithmetic in a launcher is still rejected",
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    total = x * 2\n    chosen[1, rt.current_stream()](x, y, total)",
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_clean(
+        "a launcher published under a second name is accepted",
+        Backend.PYASC,
+        ALIASED_KERNEL.replace(
+            "def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:",
+            "def run_impl(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:",
+        ).replace(
+            "        kernel[1, rt.current_stream()](x, y, x.numel())\n",
+            "        kernel[1, rt.current_stream()](x, y, x.numel())\n\n\nrun = run_impl\n",
+            1,
+        ),
+        ALIASED_WRAPPER,
+    )
+    expect_rejected(
+        "an alias of a helper that never launches is still rejected",
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    return None",
+        ).replace(
+            "def run(",
+            "def _noop(x: torch.Tensor, y: torch.Tensor) -> None:\n"
+            "    return None\n\n\n"
+            "def run(",
+        )
+        + "\n\nrun_alias = _noop",
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_alias(A, B)"),
+    )
+    expect_clean(
+        "an integer bit_length() stays scalar shape arithmetic",
+        Backend.PYASC,
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    steps = (x.numel() // 8).bit_length() - 1\n"
+            "    total = x.numel() + steps\n"
+            "    chosen[1, rt.current_stream()](x, y, total)",
         ),
         ALIASED_WRAPPER,
     )

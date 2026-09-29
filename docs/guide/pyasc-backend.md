@@ -162,6 +162,16 @@ never launches is rejected. Host code may allocate, compute shapes, move data,
 and launch; tensor compute outside the device kernels is rejected, including
 when it is hidden inside a host helper.
 
+A kernel or a launcher may also be chosen at run time, which the call graph
+resolves rather than rejecting: a module-level tuple, list or dict of kernels
+or launchers, a module-level alias of a launcher (`run = softsign_launch`), and
+the selector subscript in `_KERNELS[mode][cores, stream](...)`. Generated
+samples use all of those shapes. A subscripted collection that holds no kernel
+or launcher is still rejected, as is an alias of a helper that never launches.
+Host-side shape arithmetic keeps counting metadata calls
+(`numel`, `element_size`, `bit_length`, `x.shape`) as scalars; arithmetic on
+tensor values stays rejected.
+
 ## Checking one candidate without an NPU
 
 pyasc ships a simulator. It runs the same `kernel.py` on CPU tensors, so a
