@@ -283,7 +283,17 @@ class SampleEvaluator:
         """Compile and load the backend's kernel; fail-payload on error."""
         if self.backend is Backend.PYASC:
             return self._load_pyasc()
-        asc_source = (self.sample_path / "custom_op.asc").read_text(encoding="utf-8")
+        try:
+            asc_source = (self.sample_path / "custom_op.asc").read_text(
+                encoding="utf-8"
+            )
+        except OSError as exc:
+            return fail_result(
+                compiled=self.compiled,
+                compilation_error=f"cannot read custom_op.asc: {exc!r}",
+                failure_stage="module_load",
+                **runtime_failure(exc, stage="module_load"),
+            )
         self.metadata["build_mode"] = (
             "split" if split_asc_source(asc_source) is not None else "legacy"
         )

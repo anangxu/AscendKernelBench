@@ -359,6 +359,33 @@ def main() -> int:
             expect_clean(label, Backend.PYASC, source, ALIASED_WRAPPER)
         else:
             expect_rejected(label, source, ALIASED_WRAPPER)
+    expect_clean(
+        "wrapper module-level value constants are shape bookkeeping",
+        Backend.PYASC,
+        add_kernel,
+        add_wrapper.replace(
+            "import kernel",
+            "import kernel\n\n_N = 0\n_WINDOW = (1, 2)",
+        ).replace(
+            "        return kernel.add_launch(A, B)",
+            "        global _N\n"
+            "        _N = _N + 1\n"
+            "        if _WINDOW[0] <= _N <= _WINDOW[1]:\n"
+            "            return kernel.add_launch(A, B)\n"
+            "        return kernel.add_launch(A, B)",
+        ),
+    )
+    expect_rejected(
+        "a wrapper helper doing tensor math is still rejected",
+        add_kernel,
+        add_wrapper.replace(
+            "import kernel",
+            "import kernel\n\n\ndef helper(x):\n    return x * 2",
+        ).replace(
+            "        return kernel.add_launch(A, B)",
+            "        scaled = helper(A)\n        return kernel.add_launch(scaled, B)",
+        ),
+    )
     expect_rejected("launcher that never launches", never_launches, add_wrapper)
 
     hidden = add_kernel.replace(

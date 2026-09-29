@@ -440,19 +440,18 @@ def test_invalid_timing_is_excluded_from_performance() -> None:
 
 
 def test_ascendc_build_path_untouched() -> None:
-    """The Ascend C branch still reads custom_op.asc as before."""
+    """The Ascend C branch reads custom_op.asc and reports it as a payload."""
     with tempfile.TemporaryDirectory() as tmp:
         evaluator = SampleEvaluator(make_request(Path(tmp), "ascendc"))
-        try:
-            evaluator._build_and_load()
-        except FileNotFoundError:
-            check("ascendc path still reads custom_op.asc", True)
-        else:
-            check(
-                "ascendc path still reads custom_op.asc",
-                False,
-                "expected FileNotFoundError for a missing custom_op.asc",
-            )
+        result = evaluator._build_and_load()
+        check("ascendc path still reads custom_op.asc", result is not None)
+        assert result is not None
+        check(
+            "a missing custom_op.asc is a classified payload, not a raise",
+            result["compiled"] is False
+            and result["metadata"].get("failure_stage") == "module_load",
+            repr(result["metadata"].get("failure_stage")),
+        )
 
 
 def test_unsupported_dtype_is_reported_not_casted() -> None:
@@ -1439,6 +1438,34 @@ def test_run_survives_device_preparation_failure() -> None:
         )
 
 
+def test_missing_ascendc_source_is_a_payload() -> None:
+    """A missing custom_op.asc is a classified failure, not an exception."""
+    with tempfile.TemporaryDirectory() as tmp:
+        evaluator = SampleEvaluator(make_request(Path(tmp), "ascendc"))
+        result = evaluator._build_and_load()
+        check("missing custom_op.asc returns a payload", result is not None)
+        assert result is not None
+        metadata = result["metadata"]
+        check(
+            "missing custom_op.asc is not compiled",
+            result["compiled"] is False,
+            repr(result["compiled"]),
+        )
+        check(
+            "missing custom_op.asc is classified at module_load",
+            metadata.get("failure_stage") == "module_load"
+            and metadata.get("runtime_error_class") == "FileNotFoundError"
+            and metadata.get("runtime_error_stage") == "module_load",
+            repr(
+                (
+                    metadata.get("failure_stage"),
+                    metadata.get("runtime_error_class"),
+                    metadata.get("runtime_error_stage"),
+                )
+            ),
+        )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -1467,6 +1494,7 @@ def main() -> int:
     test_run_keeps_correctness_when_timing_inputs_fail()
     test_run_discards_incomplete_timing()
     test_run_survives_device_preparation_failure()
+    test_missing_ascendc_source_is_a_payload()
     test_sol_mean_uses_only_correct_samples_with_valid_timing()
     print()
     if FAILURES:
