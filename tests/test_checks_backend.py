@@ -99,6 +99,73 @@ class ModelNew(torch.nn.Module):
 """
 
 
+# Two more legal shapes: the kernel is chosen at run time through a local name,
+# and through a loop over a module-level collection of kernels.
+ALIASED_KERNEL = """\
+import torch
+import torch_npu  # noqa: F401
+
+import asc
+import asc.lib.runtime as rt
+
+
+@asc.jit
+def a_kernel(x: asc.GlobalAddress, y: asc.GlobalAddress, n: asc.ConstExpr[int]):
+    x_gm = asc.GlobalTensor()
+    y_gm = asc.GlobalTensor()
+    x_gm.set_global_buffer(x, n)
+    y_gm.set_global_buffer(y, n)
+    pipe = asc.TPipe()
+    q = asc.TQue(asc.TPosition.VECIN, 1)
+    pipe.init_buffer(q, 1, n * 4)
+    t = q.alloc_tensor(asc.float32)
+    asc.data_copy(t, x_gm, n)
+    q.enque(t)
+    out = q.deque(asc.float32)
+    asc.data_copy(y_gm, out, n)
+    q.free_tensor(out)
+
+
+@asc.jit
+def b_kernel(x: asc.GlobalAddress, y: asc.GlobalAddress, n: asc.ConstExpr[int]):
+    x_gm = asc.GlobalTensor()
+    y_gm = asc.GlobalTensor()
+    x_gm.set_global_buffer(x, n)
+    y_gm.set_global_buffer(y, n)
+    pipe = asc.TPipe()
+    q = asc.TQue(asc.TPosition.VECIN, 1)
+    pipe.init_buffer(q, 1, n * 4)
+    t = q.alloc_tensor(asc.float32)
+    asc.data_copy(t, x_gm, n)
+    q.enque(t)
+    out = q.deque(asc.float32)
+    asc.data_copy(y_gm, out, n)
+    q.free_tensor(out)
+
+
+_KERNELS = (a_kernel, b_kernel)
+
+
+def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:
+    chosen = a_kernel if slope <= 1.0 else b_kernel
+    chosen[1, rt.current_stream()](x, y, x.numel())
+
+
+def run_collection(x: torch.Tensor, y: torch.Tensor) -> None:
+    for kernel in _KERNELS:
+        kernel[1, rt.current_stream()](x, y, x.numel())
+"""
+
+ALIASED_WRAPPER = """\
+import kernel
+
+
+class ModelNew(torch.nn.Module):
+    def forward(self, A: torch.Tensor, B: torch.Tensor) -> None:
+        return kernel.run(A, B)
+"""
+
+
 def main() -> int:
     asc = (ROOT / "src/prompts/examples/001_elementwise_add/custom_op.asc").read_text()
     asc_wrapper = (
@@ -161,6 +228,26 @@ def main() -> int:
             "def _launch(x, z, total) -> None:",
         ),
         NESTED_AND_DELEGATED_WRAPPER,
+    )
+    expect_clean(
+        "a kernel chosen through a local alias is accepted",
+        Backend.PYASC,
+        ALIASED_KERNEL,
+        ALIASED_WRAPPER,
+    )
+    expect_clean(
+        "a kernel chosen by looping over a module-level collection is accepted",
+        Backend.PYASC,
+        ALIASED_KERNEL,
+        ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_collection(A, B)"),
+    )
+    expect_rejected(
+        "a bare call through the alias is still rejected",
+        ALIASED_KERNEL.replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    chosen(x, y, x.numel())",
+        ),
+        ALIASED_WRAPPER,
     )
     expect_rejected("wrapper without ModelNew", add_kernel, "import torch\n")
     expect_rejected(

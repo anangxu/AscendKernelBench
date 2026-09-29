@@ -39,6 +39,7 @@ class KernelFacts:
     module_scalars: set[str] = field(default_factory=set)
     kernel_modules: set[str] = field(default_factory=set)
     imported_kernels: set[str] = field(default_factory=set)
+    kernel_collections: dict[str, set[str]] = field(default_factory=dict)
     violations: list[str] = field(default_factory=list)
 
     def sink_names(self) -> set[str]:
@@ -254,6 +255,8 @@ def check_kernel_source(source: str) -> KernelFacts:
     for node in module_level:
         if _is_jit_function(node):
             facts.jit_functions[node.name] = node
+    # Needs the kernel names, so it runs after they are collected.
+    facts.kernel_collections = _kernel_collections(tree, set(facts.jit_functions))
 
     if not facts.jit_functions:
         facts.violations.append(
@@ -269,7 +272,12 @@ def check_kernel_source(source: str) -> KernelFacts:
             facts.violations.extend(_device_violations(node.name, node, scope))
             continue
         launched, unknown = _launch_sites(node.body, jit_names, imported, module_names)
-        launched &= jit_names
+        # A launcher may pick its kernel at run time (chosen = a if cond else b)
+        # and subscript the local name. That still launches, so resolve those
+        # aliases back to the kernels they can hold before filtering.
+        launched = _resolve_kernel_aliases(
+            launched, node, jit_names, facts.kernel_collections
+        )
         facts.host_functions[node.name] = node
         if launched:
             facts.launches.update(launched)
@@ -297,6 +305,105 @@ def check_kernel_source(source: str) -> KernelFacts:
         )
     facts.launcher_entries = _reachable_launchers(facts)
     return facts
+
+
+def _resolve_kernel_aliases(
+    launched: set[str],
+    node: ast.FunctionDef,
+    jit_names: set[str],
+    collections: dict[str, set[str]] | None = None,
+) -> set[str]:
+    """Map locally aliased names back to the @asc.jit kernels they may hold.
+
+    `chosen = kernel_a if cond else kernel_b` followed by `chosen[cores](...)`
+    launches one of two kernels; without this the sample looks like it never
+    launches anything.
+    """
+    aliases = _kernel_aliases(node, jit_names, collections or {})
+
+    resolved: set[str] = set()
+    for name in launched:
+        if name in jit_names:
+            resolved.add(name)
+        resolved |= aliases.get(name, set())
+    return resolved & jit_names
+
+
+def _kernel_aliases(
+    node: ast.FunctionDef,
+    jit_names: set[str],
+    collections: dict[str, set[str]] | None = None,
+) -> dict[str, set[str]]:
+    """Return local names that can hold an @asc.jit kernel at call time.
+
+    Covers `chosen = a if cond else b` and `for kernel in _KERNELS:`, both of
+    which launch through a local name rather than the kernel name.
+    """
+    collections = collections or {}
+    aliases: dict[str, set[str]] = {}
+
+    def record(target: ast.AST, value: ast.AST) -> bool:
+        if not isinstance(target, ast.Name):
+            return False
+        names = _names_of_kernels(value, jit_names, aliases, collections)
+        if names and not names <= aliases.get(target.id, set()):
+            aliases[target.id] = aliases.get(target.id, set()) | names
+            return True
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for stmt in ast.walk(_module_of(node)):
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                changed |= record(stmt.targets[0], stmt.value)
+            elif isinstance(stmt, ast.For):
+                for target in ast.walk(stmt.target):
+                    changed |= record(target, stmt.iter)
+    return aliases
+
+
+def _kernel_collections(tree: ast.Module, jit_names: set[str]) -> dict[str, set[str]]:
+    """Return module-level names holding only @asc.jit kernels."""
+    collections: dict[str, set[str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name):
+                continue
+            names = _names_of_kernels(node.value, jit_names, {}, collections)
+            if names and not names <= collections.get(target.id, set()):
+                collections[target.id] = collections.get(target.id, set()) | names
+                changed = True
+    return collections
+
+
+def _names_of_kernels(
+    value: ast.AST,
+    jit_names: set[str],
+    aliases: dict[str, set[str]],
+    collections: dict[str, set[str]] | None = None,
+) -> set[str]:
+    """Return the kernels an expression names, directly or through aliases."""
+    collections = collections or {}
+    if isinstance(value, ast.Name):
+        if value.id in jit_names:
+            return {value.id}
+        return set(aliases.get(value.id, set())) | set(collections.get(value.id, set()))
+    if isinstance(value, ast.IfExp):
+        return _names_of_kernels(
+            value.body, jit_names, aliases, collections
+        ) | _names_of_kernels(value.orelse, jit_names, aliases, collections)
+    if isinstance(value, (ast.Tuple, ast.List)):
+        found: set[str] = set()
+        for element in value.elts:
+            found |= _names_of_kernels(element, jit_names, aliases, collections)
+        return found
+    return set()
 
 
 def _reachable_launchers(facts: KernelFacts) -> dict[str, ast.FunctionDef]:
@@ -340,7 +447,15 @@ def check_kernel_launchers(facts: KernelFacts) -> list[str]:
     violations: list[str] = []
     jit = frozenset(facts.jit_functions)
     for name, node in facts.host_functions.items():
-        sink = Sink(direct=jit, attr_mode=frozenset(facts.kernel_modules))
+        # An aliased kernel (chosen = a if cond else b) is still the sink the
+        # launcher routes compute through, and the message must be the pyasc
+        # one rather than the Ascend C default.
+        aliases = _kernel_aliases(node, set(jit), facts.kernel_collections)
+        sink = Sink(
+            direct=jit | frozenset(aliases),
+            attr_mode=frozenset(facts.kernel_modules),
+            kind="kernel",
+        )
         try:
             semantics = WrapperSemantics(
                 ast.unparse(_module_of(node)),
