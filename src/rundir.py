@@ -21,13 +21,54 @@ from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
 
 
 def create_run(run_name: str, generation_config: dict) -> Path:
-    """Create the run directory and stamp the generation config."""
+    """Create the run directory and stamp the generation config.
+
+    An existing directory is checked before anything is written, so a run whose
+    recorded backend or finished candidates conflict with this request is
+    refused rather than silently restamped.
+
+    Raises:
+        ValueError: If the directory records a different backend.
+        FileExistsError: If it already holds candidates for the planned tasks.
+    """
     run_dir = RUNS_DIR / run_name
+    if run_dir.is_dir() and generation_config:
+        _check_run_compatible(run_dir, generation_config)
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = run_dir / "generation_config.yaml"
     if generation_config:
         write_yaml_atomic(cfg_path, generation_config)
     return run_dir
+
+
+def _check_run_compatible(run_dir: Path, generation_config: dict) -> None:
+    """Refuse to restamp a run that this generation request conflicts with."""
+    requested = parse_backend(
+        _backend_name(generation_config.get("backend") or DEFAULT_BACKEND)
+    )
+    recorded = generation_backend(run_dir)
+    if recorded is not None and recorded is not requested:
+        raise ValueError(
+            f"{run_dir} records backend {recorded.value} but this generation "
+            f"request uses {requested.value}; one run is one backend. Use a "
+            "new run name."
+        )
+    task_ids = generation_config.get("tasks") or []
+    samples = int(generation_config.get("num_samples") or 0)
+    existing = [
+        sample_dir(run_dir, task_id, sample_id)
+        for task_id in task_ids
+        for sample_id in range(samples)
+        if sample_complete(sample_dir(run_dir, task_id, sample_id), requested)
+        or (sample_dir(run_dir, task_id, sample_id) / "eval_result.json").is_file()
+    ]
+    if existing:
+        shown = ", ".join(str(path.relative_to(run_dir)) for path in existing[:3])
+        more = "" if len(existing) <= 3 else f" and {len(existing) - 3} more"
+        raise FileExistsError(
+            f"{run_dir} already holds {len(existing)} candidate(s): {shown}{more}. "
+            "Generation does not overwrite samples; use a new run name."
+        )
 
 
 def resolve_run(run: str | Path) -> Path:
@@ -137,11 +178,27 @@ def save_sample(
 
     Raises:
         TypeError: If generation does not match the backend.
+        FileExistsError: If the sample directory already holds a candidate or a
+            result. Generation never replaces a candidate by default: a new
+            source must not be paired with an old verdict, so the run name or
+            the sample directory has to change instead.
     """
     resolved = parse_backend(_backend_name(backend))
+    recorded = generation_backend(run_dir)
+    if recorded is not None and recorded is not resolved:
+        raise ValueError(
+            f"{run_dir} records backend {recorded.value}; refusing to write a "
+            f"{resolved.value} sample into it. One run is one backend."
+        )
+    out_dir = sample_dir(run_dir, task_id, sample_id)
+    if sample_complete(out_dir, resolved) or (out_dir / "eval_result.json").is_file():
+        raise FileExistsError(
+            f"{out_dir} already holds a candidate or its evaluation result; "
+            "generation does not overwrite samples. Use a new run name, or "
+            "remove that sample directory and generate it again."
+        )
     kernel_source = _kernel_source(generation, resolved)
     kernel_file, wrapper_file = backend_module.sample_files(resolved)
-    out_dir = sample_dir(run_dir, task_id, sample_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     (out_dir / kernel_file).write_text(kernel_source, encoding="utf-8")
@@ -201,6 +258,56 @@ def sample_complete(
     return (root / kernel_file).is_file() and (root / wrapper_file).is_file()
 
 
+def resolve_run_backend(run_dir: Path) -> Backend:
+    """Return the backend this run's samples must be evaluated with.
+
+    A recorded backend wins, and the artifacts must agree with it: a run that
+    records one backend while holding another's samples is an error rather than
+    a silent switch. Only a run without a recorded backend is detected from its
+    samples, which is the documented path for a directory copied out of a run.
+
+    Raises:
+        ValueError: If the recorded backend and the samples disagree.
+    """
+    resolved = Path(run_dir)
+    task_dirs = [
+        task_dir for task_dir in sorted(resolved.glob("level*/*")) if task_dir.is_dir()
+    ]
+    recorded = generation_backend(resolved)
+    if recorded is None:
+        for candidate in Backend:
+            if _any_sample(task_dirs, candidate):
+                return candidate
+        return DEFAULT_BACKEND
+    if _any_sample(task_dirs, recorded):
+        return recorded
+    others = [
+        candidate
+        for candidate in Backend
+        if candidate is not recorded and _any_sample(task_dirs, candidate)
+    ]
+    if others:
+        raise ValueError(
+            f"{resolved} records backend {recorded.value} but holds "
+            f"{others[0].value} samples; fix generation_config.yaml or use the "
+            "run that produced them"
+        )
+    return recorded
+
+
+def _complete_samples(
+    task_dirs: list[Path], kernel_file: str, wrapper_file: str
+) -> list[tuple[str, int, Path]]:
+    """Return (task id, sample id, dir) for every complete sample of a backend."""
+    found: list[tuple[str, int, Path]] = []
+    for task_dir in task_dirs:
+        task_id = f"{task_dir.parent.name}/{task_dir.name}"
+        for sdir in sorted(task_dir.glob("sample_*")):
+            if (sdir / kernel_file).is_file() and (sdir / wrapper_file).is_file():
+                found.append((task_id, int(sdir.name.split("_", 1)[1]), sdir))
+    return found
+
+
 def iter_sample_dirs(
     run_dir: Path,
     level: int | None = None,
@@ -220,20 +327,18 @@ def iter_sample_dirs(
         for task_dir in sorted(Path(run_dir).glob(pattern))
         if task_dir.is_dir()
     ]
-    resolved = (
-        parse_backend(_backend_name(backend))
-        if backend is not None
-        else generation_backend(run_dir)
-    )
-    candidates = _discovery_order(resolved, task_dirs)
+    if backend is not None:
+        # An explicit backend is never second-guessed: discovery and execution
+        # must agree, so a run holding another backend's samples yields nothing
+        # here instead of switching behind the caller's back.
+        resolved = parse_backend(_backend_name(backend))
+        kernel_file, wrapper_file = backend_module.sample_files(resolved)
+        yield from _complete_samples(task_dirs, kernel_file, wrapper_file)
+        return
+    candidates = _discovery_order(generation_backend(run_dir), task_dirs)
     for index, candidate in enumerate(candidates):
         kernel_file, wrapper_file = backend_module.sample_files(candidate)
-        found: list[tuple[str, int, Path]] = []
-        for task_dir in task_dirs:
-            task_id = f"{task_dir.parent.name}/{task_dir.name}"
-            for sdir in sorted(task_dir.glob("sample_*")):
-                if (sdir / kernel_file).is_file() and (sdir / wrapper_file).is_file():
-                    found.append((task_id, int(sdir.name.split("_", 1)[1]), sdir))
+        found = _complete_samples(task_dirs, kernel_file, wrapper_file)
         if found or index == len(candidates) - 1:
             yield from found
             return

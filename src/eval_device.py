@@ -799,8 +799,16 @@ class SampleEvaluator:
             return [self._process_input(item) for item in self.get_inputs()]
 
         seed_torch(self.req.seed)
-        probe_inputs = draw_inputs()
-        input_bytes = tensor_nbytes(probe_inputs)
+        # The timing inputs are drawn here as well, and a failure must not
+        # escape: correctness is already established and only the performance
+        # numbers are in question.
+        try:
+            probe_inputs = draw_inputs()
+            input_bytes = tensor_nbytes(probe_inputs)
+        except Exception as exc:
+            self._discard_timing(f"timing input preparation failed: {exc!r}")
+            self.metadata.update(runtime_failure(exc, stage="timing_inputs"))
+            return
         fresh_per_trial = input_bytes <= REFRESH_INPUT_BYTES_LIMIT
         self.metadata["timing_fresh_inputs"] = bool(fresh_per_trial)
         perf_box: list[Any] = [probe_inputs]
@@ -852,8 +860,11 @@ class SampleEvaluator:
                 ),
             )
         except Exception as exc:
+            # A partially measured timing is not a timing: discard whatever
+            # was collected so no threshold, mean or SOL score can use it.
             self.metadata["runtime_error"] = f"timing failed: {exc!r}"
             self.metadata.update(runtime_failure(exc, stage="timing"))
+            self._discard_timing(f"timing failed: {exc!r}")
 
     ################################# TIMING #################################
 

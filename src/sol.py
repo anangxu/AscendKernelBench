@@ -101,11 +101,19 @@ def task_declared_flops(namespace: Mapping[str, object]) -> float | None:
 
 
 def mean_sol_score(samples: Sequence[Mapping[str, object]]) -> float | None:
-    """Return the mean of per-sample metadata.sol_score values."""
+    """Return the mean SOL score over correct samples with trusted timings.
+
+    The same eligibility rule the speedup numbers use: a sample that failed
+    correctness, or whose timing the backend rejected, contributes nothing.
+    This changes the SOL mean only; fast_0 and pass@k read the correctness flag
+    and are untouched.
+    """
     scores: list[float] = []
     for sample in samples:
         metadata = sample.get("metadata") or {}
         if not isinstance(metadata, Mapping):
+            continue
+        if not sample.get("correctness"):
             continue
         if metadata.get("timing_valid") is False:
             continue

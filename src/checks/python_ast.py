@@ -533,12 +533,14 @@ class WrapperSemantics(ast.NodeVisitor):
         return None
 
     def _bind_range_target(self, node: ast.For | ast.comprehension) -> None:
-        """Treat for-loop range targets as scalar integers."""
-        if not (
-            isinstance(node.iter, ast.Call)
-            and isinstance(node.iter.func, ast.Name)
-            and node.iter.func.id == "range"
-        ):
+        """Bind a loop target as scalar when its iterable is scalar-only.
+
+        range(...) is the common case, but a loop over a tuple of constants or
+        over a list of scalars is shape arithmetic too. A loop over anything
+        unknown leaves the target unknown, so tensor elements cannot be read
+        out into a scalar name this way.
+        """
+        if not self._is_scalar(node.iter):
             return
         for name_node in ast.walk(node.target):
             if isinstance(name_node, ast.Name):
@@ -597,6 +599,20 @@ class WrapperSemantics(ast.NodeVisitor):
             ) and self._is_scalar(node.operand)
         if isinstance(node, (ast.Tuple, ast.List)):
             return all(self._is_scalar(elt) for elt in node.elts)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            return all(
+                self._is_scalar(gen.iter) and self._is_scalar(gen.target)
+                for gen in node.generators
+            ) and self._is_scalar(node.elt)
+        if isinstance(node, ast.DictComp):
+            return (
+                all(
+                    self._is_scalar(gen.iter) and self._is_scalar(gen.target)
+                    for gen in node.generators
+                )
+                and self._is_scalar(node.key)
+                and self._is_scalar(node.value)
+            )
         return False
 
     def _is_scalar_attribute(self, node: ast.Attribute) -> bool:
