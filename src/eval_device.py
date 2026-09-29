@@ -214,7 +214,20 @@ class SampleEvaluator:
         failed = self._load_python_modules()
         if failed is not None:
             return self._with_build_facts(failed)
-        self._prepare_device()
+        # Task-provided init inputs are read here, so a failure must become a
+        # payload: nothing has been measured yet, and the diagnostics recorded
+        # so far have to survive.
+        try:
+            self._prepare_device()
+        except Exception as exc:
+            return self._with_build_facts(
+                fail_result(
+                    compiled=self.compiled,
+                    compilation_error=f"device preparation failed: {exc!r}",
+                    failure_stage="execution",
+                    **runtime_failure(exc, stage="device_preparation"),
+                )
+            )
         failed = self._construct_models()
         if failed is not None:
             return self._with_build_facts(failed)

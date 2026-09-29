@@ -540,6 +540,17 @@ def _call_sites(
             head = target.id
         elif isinstance(target, ast.Attribute):
             head = target.attr
+        elif (
+            isinstance(target, ast.Call)
+            and isinstance(target.func, ast.Name)
+            and target.func.id == "getattr"
+            and len(target.args) >= 2
+            and isinstance(target.args[1], ast.Constant)
+            and isinstance(target.args[1].value, str)
+        ):
+            # getattr(holder, "helper")(...) names its callee statically. A
+            # computed name cannot be resolved and stays a known blind spot.
+            head = target.args[1].value
         else:
             continue
         expanded: set[str] = set()
