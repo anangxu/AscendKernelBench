@@ -624,11 +624,25 @@ def _collect_module_scalars(tree: ast.Module) -> set[str]:
             )
             if value is None or _touches_torch(value):
                 continue
-            if not _is_scalar_expr(value, scalars):
-                continue
             targets = (
                 [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
             )
+            # `H, W = 128, 256` binds one scalar per element, so both sides are
+            # unpacked instead of the assignment being skipped for its target.
+            if (
+                len(targets) == 1
+                and isinstance(targets[0], (ast.Tuple, ast.List))
+                and isinstance(value, (ast.Tuple, ast.List))
+                and len(targets[0].elts) == len(value.elts)
+            ):
+                if all(_is_scalar_expr(elt, scalars) for elt in value.elts):
+                    for element in targets[0].elts:
+                        if isinstance(element, ast.Name) and element.id not in scalars:
+                            scalars.add(element.id)
+                            changed = True
+                continue
+            if not _is_scalar_expr(value, scalars):
+                continue
             for target in targets:
                 if isinstance(target, ast.Name) and target.id not in scalars:
                     scalars.add(target.id)

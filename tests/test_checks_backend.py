@@ -241,6 +241,18 @@ def main() -> int:
         ALIASED_KERNEL,
         ALIASED_WRAPPER.replace("kernel.run(A, B)", "kernel.run_collection(A, B)"),
     )
+    expect_clean(
+        "constants bound by tuple unpacking count as scalars",
+        Backend.PYASC,
+        ALIASED_KERNEL.replace(
+            "def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:",
+            "N, W = 16, 32\n\n\ndef run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:",
+        ).replace(
+            "    chosen[1, rt.current_stream()](x, y, x.numel())",
+            "    total = N * W\n    chosen[1, rt.current_stream()](x, y, total)",
+        ),
+        ALIASED_WRAPPER,
+    )
     expect_rejected(
         "a bare call through the alias is still rejected",
         ALIASED_KERNEL.replace(
