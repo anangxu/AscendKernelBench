@@ -26,6 +26,10 @@ from src.score import summarize_eval_results  # noqa: E402
 FAILURES: list[str] = []
 
 
+class OutOfMemoryError(RuntimeError):
+    """Stand-in carrying the class name a device raises, without importing torch."""
+
+
 def check(label: str, condition: bool, detail: str = "") -> None:
     """Record one assertion result."""
     if condition:
@@ -626,6 +630,304 @@ def test_runtime_failure_is_classified_without_assigning_blame() -> None:
     )
 
 
+def test_timing_input_preparation_failure_discards_timing() -> None:
+    """A timing-input failure keeps correctness and invalidates performance."""
+    import contextlib
+
+    def build(source: str) -> SampleEvaluator:
+        evaluator = SampleEvaluator(make_request(Path("/nonexistent"), "pyasc"))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None),
+            no_grad=contextlib.nullcontext,
+        )
+        evaluator.runtime = 2.0
+        evaluator.runtime_stats = {"mean": 2.0}
+        evaluator.ref_runtime = 4.0
+        evaluator.ref_runtime_stats = {"mean": 4.0}
+        evaluator.new_model = lambda *args: None
+        if source == "get_inputs":
+
+            def boom_inputs() -> list:
+                raise OutOfMemoryError("tried to allocate 6.00 GiB")
+
+            evaluator.get_inputs = boom_inputs
+            evaluator._process_input = lambda value: value
+        else:
+            evaluator.get_inputs = lambda: [object()]
+
+            def boom_process(value: object) -> object:
+                raise OutOfMemoryError("tried to allocate 6.00 GiB")
+
+            evaluator._process_input = boom_process
+        return evaluator
+
+    for source in ("get_inputs", "_process_input"):
+        evaluator = build(source)
+        escaped = ""
+        try:
+            evaluator._validate_pyasc_timing()
+        except Exception as exc:  # noqa: BLE001 - the pre-fix behaviour
+            escaped = f"{type(exc).__name__}: {exc}"
+        check(f"{source} failure does not escape timing validation", escaped == "", escaped)
+        metadata = evaluator.metadata
+        check(
+            f"{source} failure invalidates the timing",
+            metadata.get("timing_valid") is False,
+            repr(metadata.get("timing_valid")),
+        )
+        check(
+            f"{source} failure leaves no performance number",
+            evaluator.runtime is None
+            and evaluator.runtime_stats is None
+            and evaluator.ref_runtime is None
+            and evaluator.ref_runtime_stats is None,
+            repr((evaluator.runtime, evaluator.ref_runtime)),
+        )
+        check(
+            f"{source} failure records the class",
+            metadata.get("runtime_error_class") == "OutOfMemoryError",
+            repr(metadata.get("runtime_error_class")),
+        )
+        check(
+            f"{source} failure records the stage",
+            metadata.get("runtime_error_stage") == "timing_inputs",
+            repr(metadata.get("runtime_error_stage")),
+        )
+        check(
+            f"{source} failure records a summary",
+            "6.00 GiB" in str(metadata.get("runtime_error_summary")),
+            repr(metadata.get("runtime_error_summary")),
+        )
+
+
+def test_construct_models_reports_the_compile_state() -> None:
+    """An init failure reports the real compile state, not an assumed one."""
+
+    class Boom:
+        def __init__(self, *args: object) -> None:
+            raise RuntimeError("model init failed")
+
+    def fail_init(evaluator: SampleEvaluator) -> dict:
+        evaluator.model_new_cls = Boom
+        evaluator.init_inputs = []
+        evaluator.torch_device = None
+        evaluator.dtype = None
+        result = evaluator._construct_models()
+        assert result is not None
+        return result
+
+    with tempfile.TemporaryDirectory() as tmp:
+        before = SampleEvaluator(make_request(Path(tmp), "pyasc"))
+        result = fail_init(before)
+        check(
+            "pyasc init failure before the first call is not compiled",
+            result["compiled"] is False,
+            repr(result["compiled"]),
+        )
+        check(
+            "pyasc init failure before the first call is an execution failure",
+            result["metadata"].get("failure_stage") == "execution"
+            and result["metadata"].get("runtime_error_stage") == "model_init",
+            repr(result["metadata"].get("runtime_error_stage")),
+        )
+
+        after = SampleEvaluator(make_request(Path(tmp), "pyasc"))
+        after.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None)
+        )
+        after.get_inputs = lambda: []
+        after._process_input = lambda value: value
+        after.new_model = lambda *args: None
+        real_construct = after._construct_models
+        after._construct_models = lambda: None
+        original_seed = eval_device.seed_torch
+        eval_device.seed_torch = lambda value: None
+        try:
+            check("pyasc warm-up succeeds", after._warm_up_pyasc() is None)
+        finally:
+            eval_device.seed_torch = original_seed
+        after._construct_models = real_construct
+        result = fail_init(after)
+        check(
+            "pyasc init failure after a successful first call is compiled",
+            result["compiled"] is True,
+            repr(result["compiled"]),
+        )
+
+        built = SampleEvaluator(make_request(Path(tmp), "ascendc"))
+        (Path(tmp) / "custom_op.asc").write_text("// legacy kernel\n")
+        original_build = eval_device.build_custom_op
+        original_load = eval_device.load_custom_op
+        eval_device.build_custom_op = lambda *a, **k: Path(tmp) / "libcustom_op.so"
+        eval_device.load_custom_op = lambda *a, **k: None
+        try:
+            check("ascendc build returns no failure", built._build_and_load() is None)
+        finally:
+            eval_device.build_custom_op = original_build
+            eval_device.load_custom_op = original_load
+        result = fail_init(built)
+        check(
+            "ascendc init failure after a successful build is compiled",
+            result["compiled"] is True,
+            repr(result["compiled"]),
+        )
+
+        loader = SampleEvaluator(make_request(Path(tmp), "pyasc"))
+        loader.req = loader.req.model_copy(update={"task_py": "raise RuntimeError('boom')"})
+        result = loader._load_python_modules()
+        assert result is not None
+        check(
+            "pyasc module-load failure before the first call is not compiled",
+            result["compiled"] is False,
+            repr(result["compiled"]),
+        )
+
+
+def test_late_trial_failure_keeps_diagnostics() -> None:
+    """A trial failure after the first call keeps the diagnostics it produced."""
+    import contextlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = Path(tmp)
+        (sample / "model_new.py").write_text("class ModelNew: pass\n")
+        evaluator = SampleEvaluator(make_request(sample, "pyasc"))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None),
+            no_grad=contextlib.nullcontext,
+        )
+        evaluator.get_inputs = lambda: []
+        evaluator._process_input = lambda value: value
+        evaluator.new_model = lambda *args: "same"
+        evaluator._run_reference = lambda inputs, raw, trial, stage=None: "same"
+        evaluator._outputs_ok = lambda ref, new: ref == new
+        evaluator._construct_models = lambda: None
+
+        original_diff = eval_device.max_abs_diff
+        original_seed = eval_device.seed_torch
+        original_facts = eval_device.runtime_facts
+        eval_device.max_abs_diff = lambda ref, new: 0.0
+        eval_device.seed_torch = lambda value: None
+        eval_device.runtime_facts = lambda path: {
+            "pyasc_version": "1.1.1",
+            "platform": "Ascend910B4",
+        }
+        try:
+            check("warm-up records no failure", evaluator._warm_up_pyasc() is None)
+
+            def boom(*args: object) -> object:
+                raise OutOfMemoryError("tried to allocate 6.00 GiB")
+
+            evaluator.new_model = boom
+            evaluator.torch = SimpleNamespace(
+                npu=SimpleNamespace(synchronize=lambda **kwargs: None),
+                no_grad=contextlib.nullcontext,
+                randint=lambda *a, **k: SimpleNamespace(item=lambda: 7),
+            )
+            failed = evaluator._run_correctness_trials()
+        finally:
+            eval_device.max_abs_diff = original_diff
+            eval_device.seed_torch = original_seed
+            eval_device.runtime_facts = original_facts
+
+        check("late trial failure returns a payload", failed is not None)
+        assert failed is not None
+        result = evaluator._with_build_facts(failed)
+        metadata = result["metadata"]
+        check("late trial failure is compiled", result["compiled"] is True, repr(result["compiled"]))
+        check(
+            "late trial failure is not correct",
+            result["correctness"] is False,
+            repr(result["correctness"]),
+        )
+        check(
+            "late trial failure reports no timing",
+            result["runtime"] is None
+            and result["runtime_stats"] is None
+            and result["ref_runtime"] is None
+            and result["ref_runtime_stats"] is None,
+            repr(result["runtime"]),
+        )
+        check(
+            "first_call_seconds survives the later failure",
+            isinstance(metadata.get("first_call_seconds"), float),
+            repr(metadata.get("first_call_seconds")),
+        )
+        check(
+            "first_call_correct survives the later failure",
+            metadata.get("first_call_correct") is True,
+            repr(metadata.get("first_call_correct")),
+        )
+        check(
+            "runtime facts survive the later failure",
+            metadata.get("pyasc_version") == "1.1.1"
+            and metadata.get("platform") == "Ascend910B4",
+            repr((metadata.get("pyasc_version"), metadata.get("platform"))),
+        )
+        check(
+            "the failure's own error fields win",
+            metadata.get("failure_stage") == "execution"
+            and metadata.get("runtime_error_class") == "OutOfMemoryError"
+            and metadata.get("runtime_error_stage") == "candidate_trial"
+            and "trial 0" in str(metadata.get("runtime_error")),
+            repr(metadata.get("runtime_error")),
+        )
+
+
+def test_hidden_input_preparation_failure_is_classified() -> None:
+    """A hidden-gate input failure fails the gate instead of escaping."""
+    import contextlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = Path(tmp)
+        (sample / "model_new.py").write_text("class ModelNew: pass\n")
+        evaluator = SampleEvaluator(make_request(sample, "pyasc"))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None),
+            no_grad=contextlib.nullcontext,
+        )
+        evaluator.new_model = lambda *args: None
+        evaluator._outputs_ok = lambda ref, new: True
+
+        def boom_inputs() -> list:
+            raise OutOfMemoryError("tried to allocate 6.00 GiB")
+
+        evaluator.get_inputs = boom_inputs
+        evaluator._process_input = lambda value: value
+
+        original_seed = eval_device.seed_torch
+        eval_device.seed_torch = lambda value: None
+        try:
+            escaped = ""
+            result: dict | None = None
+            try:
+                result = evaluator._run_hidden_distributions()
+            except Exception as exc:  # noqa: BLE001 - the pre-fix behaviour
+                escaped = f"{type(exc).__name__}: {exc}"
+        finally:
+            eval_device.seed_torch = original_seed
+
+        check("hidden input failure does not escape the gate", escaped == "", escaped)
+        check("hidden input failure returns a payload", result is not None)
+        if result is not None:
+            check(
+                "hidden input failure is compiled but not correct",
+                result["compiled"] is True and result["correctness"] is False,
+                repr((result["compiled"], result["correctness"])),
+            )
+            metadata = result["metadata"]
+            check(
+                "hidden input failure records the class and stage",
+                metadata.get("runtime_error_class") == "OutOfMemoryError"
+                and metadata.get("runtime_error_stage") == "hidden_inputs",
+                repr((metadata.get("runtime_error_class"), metadata.get("runtime_error_stage"))),
+            )
+            check(
+                "hidden input failure reports no timing",
+                result["runtime"] is None and result["ref_runtime"] is None,
+                repr(result["runtime"]),
+            )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -646,6 +948,10 @@ def main() -> int:
     test_invalid_timing_is_excluded_from_performance()
     test_unsupported_dtype_is_reported_not_casted()
     test_runtime_failure_is_classified_without_assigning_blame()
+    test_timing_input_preparation_failure_discards_timing()
+    test_construct_models_reports_the_compile_state()
+    test_late_trial_failure_keeps_diagnostics()
+    test_hidden_input_preparation_failure_is_classified()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")
