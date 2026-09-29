@@ -726,6 +726,151 @@ def _cli_env() -> dict:
     return env
 
 
+def test_run_reuse_guards() -> None:
+    """Reusing a run refuses to mix backends or replace candidates."""
+    from src.backend import Backend
+
+    _asc_gen, pyasc_gen = _make_generations()
+    with _temp_runs_dir() as (rundir, _):
+        run_dir = rundir.create_run(
+            "guard",
+            {"backend": "pyasc", "tasks": ["level1/19_ReLU"], "num_samples": 1},
+        )
+        rundir.save_sample(
+            run_dir,
+            "level1/19_ReLU",
+            0,
+            prompt="p",
+            generation=pyasc_gen,
+            backend="pyasc",
+        )
+        # Replacing a candidate is refused.
+        try:
+            rundir.save_sample(
+                run_dir,
+                "level1/19_ReLU",
+                0,
+                prompt="p2",
+                generation=pyasc_gen,
+                backend="pyasc",
+            )
+        except FileExistsError as exc:
+            assert "does not overwrite" in str(exc), exc
+        else:
+            raise AssertionError("save_sample replaced an existing candidate")
+        CHECKS.append("save_sample refuses to replace a candidate")
+
+        # A lone stale result is enough to refuse as well.
+        stale = rundir.create_run(
+            "guard_stale",
+            {"backend": "pyasc", "tasks": ["level1/05_x"], "num_samples": 1},
+        )
+        sample = stale / "level1/05_x/sample_0"
+        sample.mkdir(parents=True)
+        (sample / "eval_result.json").write_text("{}", encoding="utf-8")
+        try:
+            rundir.save_sample(
+                stale,
+                "level1/05_x",
+                0,
+                prompt="p",
+                generation=pyasc_gen,
+                backend="pyasc",
+            )
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("save_sample overwrote a stale evaluation result")
+        CHECKS.append("save_sample refuses a stale evaluation result")
+
+        # The recorded backend is checked before the config is restamped.
+        before = (run_dir / "generation_config.yaml").read_text(encoding="utf-8")
+        try:
+            rundir.create_run(
+                "guard",
+                {"backend": "ascendc", "tasks": ["level1/19_ReLU"], "num_samples": 1},
+            )
+        except ValueError as exc:
+            assert "one run is one backend" in str(exc), exc
+        else:
+            raise AssertionError("create_run restamped a run with another backend")
+        assert (run_dir / "generation_config.yaml").read_text(
+            encoding="utf-8"
+        ) == before, "the config was rewritten before the conflict was found"
+        try:
+            rundir.create_run(
+                "guard",
+                {"backend": "pyasc", "tasks": ["level1/19_ReLU"], "num_samples": 1},
+            )
+        except FileExistsError as exc:
+            assert "does not overwrite" in str(exc), exc
+        else:
+            raise AssertionError("create_run accepted a run with candidates")
+        assert (run_dir / "generation_config.yaml").read_text(
+            encoding="utf-8"
+        ) == before
+        CHECKS.append("create_run checks the backend and candidates before writing")
+
+        # A recorded backend must agree with the artifacts.
+        assert rundir.resolve_run_backend(run_dir) is Backend.PYASC
+        mixed = rundir.create_run(
+            "guard_mixed",
+            {"backend": "pyasc", "tasks": ["level1/07_y"], "num_samples": 1},
+        )
+        rundir.save_sample(
+            mixed,
+            "level1/07_y",
+            0,
+            prompt="p",
+            generation=pyasc_gen,
+            backend="pyasc",
+        )
+        (mixed / "generation_config.yaml").write_text(
+            "backend: ascendc\nmodel: m\n", encoding="utf-8"
+        )
+        try:
+            rundir.resolve_run_backend(mixed)
+        except ValueError as exc:
+            assert "records backend ascendc" in str(exc), exc
+        else:
+            raise AssertionError("a mismatched backend was silently accepted")
+        assert not list(rundir.iter_sample_dirs(mixed, backend="ascendc"))
+        assert list(rundir.iter_sample_dirs(mixed, backend="pyasc"))
+        CHECKS.append("recorded backend must match the artifacts")
+
+        # Writing a sample of another backend into a recorded run is refused.
+        try:
+            rundir.save_sample(
+                run_dir,
+                "level1/21_w",
+                0,
+                prompt="p",
+                generation=_asc_gen,
+                backend="ascendc",
+            )
+        except ValueError as exc:
+            assert "records backend pyasc" in str(exc), exc
+        else:
+            raise AssertionError("a foreign backend sample was accepted")
+        CHECKS.append("save_sample refuses a foreign backend")
+
+        # A run with no recorded backend is still detected from its samples.
+        orphan = rundir.create_run(
+            "guard_orphan",
+            {"model": "deepseek-flash", "tasks": ["level1/09_z"], "num_samples": 1},
+        )
+        rundir.save_sample(
+            orphan,
+            "level1/09_z",
+            0,
+            prompt="p",
+            generation=pyasc_gen,
+            backend="pyasc",
+        )
+        assert rundir.resolve_run_backend(orphan) is Backend.PYASC
+        CHECKS.append("an unrecorded run is detected from its samples")
+
+
 def main() -> int:
     """Run every check in order and report."""
     _stubs.install_engine_stubs()
@@ -740,6 +885,7 @@ def main() -> int:
         test_client_selects_schema_and_retries,
         test_import_without_torch,
         test_prompts_and_cli,
+        test_run_reuse_guards,
     ]
     for test in tests:
         test()

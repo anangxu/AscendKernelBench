@@ -11,6 +11,7 @@ import ast
 from dataclasses import dataclass, field
 
 from .python_ast import (
+    _SCALAR_METHODS,
     _TENSOR_COMPUTE_METHODS,
     Sink,
     WrapperSemantics,
@@ -143,8 +144,8 @@ def _launch_base(node: ast.AST, module_names: set[str]) -> tuple[str, str] | Non
     path = _resolve(node)
     if path is None or "." not in path:
         return None
-    head, _, tail = path.split(".", 1)
-    if head not in module_names or "." in tail:
+    head, tail = path.split(".", 1)
+    if head not in module_names:
         return None
     return head, tail
 
@@ -386,13 +387,37 @@ def _kernel_collections(tree: ast.Module, jit_names: set[str]) -> dict[str, set[
     return _function_collections(tree, jit_names)
 
 
+def _module_scope_statements(tree: ast.Module) -> list[ast.stmt]:
+    """Return the statements that run at module scope.
+
+    A definition or a collection may sit inside a module-level conditional or
+    try block, which is still module scope, so those blocks are walked. A
+    function or class body is not module scope and is never entered.
+    """
+    found: list[ast.stmt] = []
+
+    def visit(statements: list[ast.stmt]) -> None:
+        for node in statements:
+            found.append(node)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.ExceptHandler):
+                    visit(child.body)
+                elif isinstance(child, ast.stmt):
+                    visit([child])
+
+    visit(list(tree.body))
+    return found
+
+
 def _function_collections(tree: ast.Module, names: set[str]) -> dict[str, set[str]]:
     """Return module-level names holding only functions named in names."""
     collections: dict[str, set[str]] = {}
     changed = True
     while changed:
         changed = False
-        for node in tree.body:
+        for node in _module_scope_statements(tree):
             if not isinstance(node, ast.Assign) or len(node.targets) != 1:
                 continue
             target = node.targets[0]
@@ -411,7 +436,7 @@ def _function_aliases(tree: ast.Module, names: set[str]) -> dict[str, str]:
     changed = True
     while changed:
         changed = False
-        for node in tree.body:
+        for node in _module_scope_statements(tree):
             if not isinstance(node, ast.Assign) or len(node.targets) != 1:
                 continue
             target, value = node.targets[0], node.value
@@ -497,6 +522,162 @@ def _reachable_launchers(facts: KernelFacts) -> dict[str, ast.FunctionDef]:
     return entries
 
 
+def _call_sites(
+    node: ast.FunctionDef, facts: KernelFacts
+) -> list[tuple[set[str], list[ast.expr]]]:
+    """Return (possible callee names, positional arguments) for each call.
+
+    An attribute call is matched by its last segment, so a helper held on an
+    object or reached as a class attribute still counts. That over-approximates
+    the callee: it can only widen which functions are inspected.
+    """
+    sites: list[tuple[set[str], list[ast.expr]]] = []
+    for call in _iter_calls(node.body):
+        target: ast.AST = call.func
+        while isinstance(target, ast.Subscript):
+            target = target.value
+        if isinstance(target, ast.Name):
+            head = target.id
+        elif isinstance(target, ast.Attribute):
+            head = target.attr
+        else:
+            continue
+        expanded: set[str] = set()
+        if head in facts.host_functions:
+            expanded.add(head)
+        expanded |= facts.function_collections.get(head, set())
+        expanded |= {
+            alias
+            for alias, target_name in facts.function_aliases.items()
+            if target_name == head
+        }
+        if expanded:
+            sites.append((expanded, list(call.args)))
+    return sites
+
+
+def _positional_params(node: ast.FunctionDef) -> list[str]:
+    """Return the positional parameter names of a function definition."""
+    return [arg.arg for arg in node.args.args]
+
+
+def _is_scalar_annotation(annotation: ast.AST | None) -> bool:
+    """Return True for an int, float or bool annotation."""
+    return isinstance(annotation, ast.Name) and annotation.id in {
+        "int",
+        "float",
+        "bool",
+    }
+
+
+def _is_scalar_in(node: ast.AST | None, known: set[str]) -> bool:
+    """Return True when an expression can only carry a plain number.
+
+    Conservative by design: anything not recognised counts as unknown, so the
+    helper receiving it is treated as receiving a tensor.
+    """
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in known
+    if isinstance(node, ast.Attribute):
+        return node.attr in {"shape", "sizes"} or node.attr in _SCALAR_METHODS
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in {"int", "float", "bool", "len", "max", "min", "abs"}
+        if isinstance(func, ast.Attribute):
+            return func.attr in _SCALAR_METHODS
+        return False
+    if isinstance(node, ast.Subscript):
+        return _is_scalar_in(node.value, known)
+    if isinstance(node, ast.UnaryOp):
+        return _is_scalar_in(node.operand, known)
+    if isinstance(node, ast.BinOp):
+        return _is_scalar_in(node.left, known) and _is_scalar_in(node.right, known)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_is_scalar_in(element, known) for element in node.elts)
+    return False
+
+
+def _reachable_from_launchers(facts: KernelFacts) -> set[str]:
+    """Return launcher entries plus every host function they can call."""
+    reachable = set(facts.launcher_entries)
+    changed = True
+    while changed:
+        changed = False
+        for name in tuple(reachable):
+            node = facts.host_functions.get(name)
+            if node is None:
+                continue
+            for callees, _args in _call_sites(node, facts):
+                for callee in callees:
+                    if callee in facts.host_functions and callee not in reachable:
+                        reachable.add(callee)
+                        changed = True
+    return reachable
+
+
+def _local_scalars(
+    node: ast.FunctionDef, module_scalars: set[str], param_scalars: set[str]
+) -> set[str]:
+    """Return the names that function treats as plain numbers."""
+    try:
+        semantics = WrapperSemantics(
+            ast.unparse(_module_of(node)),
+            require_sink=False,
+            scalar_arith=True,
+            module_scalars=module_scalars | param_scalars,
+        )
+    except SyntaxError:
+        return set(param_scalars)
+    return set(semantics.scalar_refs)
+
+
+def _scalar_params_by_function(
+    facts: KernelFacts, reachable: set[str]
+) -> dict[str, set[str]]:
+    """Infer which parameters of each reachable function hold plain numbers.
+
+    A parameter is scalar only when every call site inside a reachable function
+    passes an expression that can only be a number. Annotations seed the
+    inference but are never the whole rule, and an unknown argument leaves the
+    parameter unknown, so arithmetic on it is still reported.
+    """
+    scalars: dict[str, set[str]] = {name: set() for name in reachable}
+    for name in reachable:
+        node = facts.host_functions.get(name)
+        if node is None:
+            continue
+        for arg in [*node.args.args, *node.args.kwonlyargs]:
+            if _is_scalar_annotation(arg.annotation):
+                scalars[name].add(arg.arg)
+    changed = True
+    while changed:
+        changed = False
+        for caller in reachable:
+            node = facts.host_functions.get(caller)
+            if node is None:
+                continue
+            known = _local_scalars(node, facts.module_scalars, scalars[caller])
+            for callees, args in _call_sites(node, facts):
+                for callee in callees:
+                    if callee not in reachable:
+                        continue
+                    target = facts.host_functions.get(callee)
+                    if target is None:
+                        continue
+                    for index, param in enumerate(_positional_params(target)):
+                        if index >= len(args) or param in scalars[callee]:
+                            continue
+                        if _is_scalar_in(args[index], known):
+                            scalars[callee].add(param)
+                            changed = True
+    return scalars
+
+
 def _module_of(node: ast.FunctionDef) -> ast.Module:
     """Return a module holding only node, so it can be walked in isolation."""
     module = ast.Module(body=[node], type_ignores=[])
@@ -512,6 +693,10 @@ def check_kernel_launchers(facts: KernelFacts) -> list[str]:
     """
     violations: list[str] = []
     jit = frozenset(facts.jit_functions)
+    # A launcher may hand its work to helpers; those helpers are inspected too,
+    # with the scalar parameters its call sites actually pass.
+    reachable = _reachable_from_launchers(facts)
+    scalar_params = _scalar_params_by_function(facts, reachable)
     for name, node in facts.host_functions.items():
         # An aliased kernel (chosen = a if cond else b) is still the sink the
         # launcher routes compute through, and the message must be the pyasc
@@ -534,12 +719,12 @@ def check_kernel_launchers(facts: KernelFacts) -> list[str]:
                 ast.unparse(_module_of(node)),
                 sink=sink,
                 require_sink=name in facts.launchers,
-                # Every host function that can reach a launch obeys the shape
-                # arithmetic rule, not only the one holding the subscript: a
-                # dispatcher is accepted for its call graph, so it must not
-                # become a place to compute on tensors.
-                scalar_arith=name in facts.launcher_entries,
-                module_scalars=facts.module_scalars,
+                # Every host function reachable from a launcher obeys the
+                # shape arithmetic rule, in both directions: the launcher that
+                # holds the subscript and the helpers it calls are all checked,
+                # so tensor arithmetic cannot hide one call deeper.
+                scalar_arith=name in reachable,
+                module_scalars=facts.module_scalars | scalar_params.get(name, set()),
             )
         except SyntaxError as exc:
             violations.append(f"kernel.py {name} does not parse: {exc}")

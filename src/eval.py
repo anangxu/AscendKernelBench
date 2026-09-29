@@ -52,8 +52,9 @@ def _load_run_settings(
     """Load the default protocol, the run's hardware, and its backend."""
     config = load_eval_config()
     hw_name = rundir.generation_hardware_name(run_dir) or config.hardware
-    recorded = rundir.generation_backend(run_dir)
-    backend = DEFAULT_BACKEND if recorded is None else recorded
+    # One backend for discovery and execution; a run whose recorded backend and
+    # artifacts disagree raises here instead of evaluating with the wrong one.
+    backend = rundir.resolve_run_backend(run_dir)
     return config, load_hardware_profile(hw_name), backend
 
 

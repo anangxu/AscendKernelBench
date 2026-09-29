@@ -999,9 +999,19 @@ class RunFakes:
     handling and its result assembly stay the real code.
     """
 
-    def __init__(self, evaluator: SampleEvaluator, *, recheck_ok: bool) -> None:
+    def __init__(
+        self,
+        evaluator: SampleEvaluator,
+        *,
+        recheck_ok: bool,
+        real_timing: bool = False,
+        timing_raises: bool = False,
+    ) -> None:
         self.evaluator = evaluator
         self.recheck_ok = recheck_ok
+        self.real_timing = real_timing
+        self.timing_raises = timing_raises
+        self.timing_calls = 0
         self.calls = {"outputs": 0}
         self._modules: dict[str, object] = {}
         self._attrs: dict[str, object] = {}
@@ -1035,6 +1045,7 @@ class RunFakes:
             ),
             device=lambda spec: spec,
             float32="float32",
+            Tensor=type("Tensor", (), {}),
             no_grad=lambda: contextlib.nullcontext(),
             randint=lambda *a, **k: _Item(7),
         )
@@ -1071,7 +1082,18 @@ class RunFakes:
             return True
 
         ev._outputs_ok = outputs_ok
-        ev._time_both_models = self._fake_time
+        if self.real_timing:
+            # Keep the real _time_both_models; only the device timing call is
+            # simulated, so its own guards and bookkeeping run for real.
+            def fake_timing(*args: object, **kwargs: object) -> list[float]:
+                self.timing_calls += 1
+                if self.timing_raises:
+                    raise OutOfMemoryError("tried to allocate 6.00 GiB")
+                return [1.0, 1.1]
+
+            self._patch("time_execution_with_npu_event", fake_timing)
+        else:
+            ev._time_both_models = self._fake_time
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -1225,6 +1247,143 @@ def test_metadata_merge_keeps_diagnostics_and_prefers_failures() -> None:
     )
 
 
+def test_run_discards_incomplete_timing() -> None:
+    """The real _time_both_models must not let a timing failure escape."""
+    with tempfile.TemporaryDirectory() as tmp:
+        evaluator = _composite_sample(tmp, 4)  # the timing draw raises
+        with RunFakes(evaluator, recheck_ok=True, real_timing=True) as fakes:
+            result = evaluator.run()
+        metadata = result["metadata"]
+        check(
+            "timing input failure in the real timer never reaches the device call",
+            fakes.timing_calls == 0,
+            repr(fakes.timing_calls),
+        )
+        check(
+            "timing input failure still leaves the sample correct",
+            result["correctness"] is True and result["compiled"] is True,
+            repr((result["compiled"], result["correctness"])),
+        )
+        check(
+            "timing input failure is discarded and classified",
+            metadata.get("timing_valid") is False
+            and metadata.get("runtime_error_class") == "OutOfMemoryError"
+            and metadata.get("runtime_error_stage") == "timing_inputs",
+            repr(
+                (
+                    metadata.get("timing_valid"),
+                    metadata.get("runtime_error_class"),
+                    metadata.get("runtime_error_stage"),
+                )
+            ),
+        )
+        check(
+            "no performance number survives the timing input failure",
+            result["runtime"] is None
+            and result["ref_runtime"] is None
+            and all(
+                key not in metadata
+                for key in ("speedup", "sol_score", "sol_bound_ms", "bytes_moved")
+            ),
+            repr(sorted(metadata)),
+        )
+        check(
+            "the post-timing re-check still ran",
+            fakes.calls["outputs"] == 7,
+            repr(fakes.calls),
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        evaluator = _composite_sample(tmp, 0)  # inputs are fine
+        with RunFakes(
+            evaluator, recheck_ok=True, real_timing=True, timing_raises=True
+        ) as fakes:
+            result = evaluator.run()
+        metadata = result["metadata"]
+        check(
+            "a measurement failure is classified as timing",
+            fakes.timing_calls > 0
+            and metadata.get("runtime_error_class") == "OutOfMemoryError"
+            and metadata.get("runtime_error_stage") == "timing",
+            repr((fakes.timing_calls, metadata.get("runtime_error_stage"))),
+        )
+        check(
+            "a measurement failure discards the partial timing",
+            metadata.get("timing_valid") is False and result["runtime"] is None,
+            repr((metadata.get("timing_valid"), result["runtime"])),
+        )
+        check(
+            "a measurement failure keeps correctness",
+            result["correctness"] is True and result["compiled"] is True,
+            repr(result["correctness"]),
+        )
+        check(
+            "a measurement failure keeps the diagnostics",
+            isinstance(metadata.get("first_call_seconds"), float)
+            and metadata.get("first_call_correct") is True
+            and metadata.get("pyasc_version") == "1.1.1",
+            repr(metadata.get("first_call_seconds")),
+        )
+
+
+def test_sol_mean_uses_only_correct_samples_with_valid_timing() -> None:
+    """The SOL mean follows the same eligibility as the speedup numbers."""
+    from src.sol import mean_sol_score
+
+    incorrect = {
+        "compiled": True,
+        "correctness": False,
+        "runtime": 2.0,
+        "ref_runtime": 4.0,
+        "metadata": {"timing_valid": True, "sol_score": 0.9, "speedup": 2.0},
+    }
+    untrusted = {
+        "compiled": True,
+        "correctness": True,
+        "runtime": None,
+        "ref_runtime": 4.0,
+        "metadata": {"timing_valid": False, "sol_score": 0.5},
+    }
+    good = {
+        "compiled": True,
+        "correctness": True,
+        "runtime": 2.0,
+        "ref_runtime": 4.0,
+        "metadata": {"timing_valid": True, "sol_score": 0.25},
+    }
+    check(
+        "an incorrect sample contributes no SOL score",
+        mean_sol_score([incorrect]) is None,
+        repr(mean_sol_score([incorrect])),
+    )
+    check(
+        "a rejected timing contributes no SOL score",
+        mean_sol_score([untrusted]) is None,
+        repr(mean_sol_score([untrusted])),
+    )
+    check(
+        "only the eligible sample counts toward the SOL mean",
+        mean_sol_score([incorrect, untrusted, good]) == 0.25,
+        repr(mean_sol_score([incorrect, untrusted, good])),
+    )
+    summary = summarize_eval_results({"level1/x": [incorrect, untrusted, good]})
+    check(
+        "the summary applies the same SOL rule",
+        summary["mean_sol_score"] == 0.25,
+        repr(summary["mean_sol_score"]),
+    )
+    check(
+        "the SOL rule leaves fast_0 alone",
+        summary["fast_p"]["fast_0"] == 2 / 3,
+        repr(summary["fast_p"]["fast_0"]),
+    )
+    check(
+        "the SOL rule leaves pass@k inputs alone",
+        summary["correct"] == 2 and summary["total_samples"] == 3,
+        repr((summary["correct"], summary["total_samples"])),
+    )
+
+
 def main() -> int:
     test_request_backend_field()
     test_pyasc_missing_kernel_file()
@@ -1251,6 +1410,8 @@ def main() -> int:
     test_hidden_input_preparation_failure_is_classified()
     test_metadata_merge_keeps_diagnostics_and_prefers_failures()
     test_run_keeps_correctness_when_timing_inputs_fail()
+    test_run_discards_incomplete_timing()
+    test_sol_mean_uses_only_correct_samples_with_valid_timing()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} -> {FAILURES}")

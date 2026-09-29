@@ -207,6 +207,94 @@ def dispatch(x: torch.Tensor, y: torch.Tensor) -> None:
 )
 
 
+BASE_KERNEL = re.split(r"\n_KERNELS = \(a_kernel, b_kernel\)", ALIASED_KERNEL)[0]
+
+RUN_HEAD = (
+    "def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:\n"
+    "    chosen = a_kernel if slope <= 1.0 else b_kernel\n"
+)
+
+
+def _helper_cases() -> list[tuple[str, bool, str]]:
+    """Return (label, expect_clean, host source) for helper reachability."""
+    launch = "    chosen[1, rt.current_stream()](x, y, total)"
+    return [
+        (
+            "a helper called with scalars keeps its planning arithmetic",
+            True,
+            "def plan(rows: int, cols: int) -> int:\n"
+            "    return (rows * cols) % 8\n\n\n"
+            + RUN_HEAD + "    total = plan(x.numel(), 4)\n" + launch,
+        ),
+        (
+            "an unannotated helper whose call sites pass scalars is accepted",
+            True,
+            "def plan(rows, cols) -> int:\n"
+            "    return (rows * cols) % 8\n\n\n"
+            + RUN_HEAD + "    total = plan(x.numel(), 4)\n" + launch,
+        ),
+        (
+            "tensor arithmetic in a helper the launcher calls is rejected",
+            False,
+            "def helper(x: torch.Tensor) -> int:\n"
+            "    scaled = x * 2\n"
+            "    return scaled.numel()\n\n\n"
+            + RUN_HEAD + "    total = helper(x)\n" + launch,
+        ),
+        (
+            "the same helper reached by an attribute call is rejected",
+            False,
+            "class Runner:\n"
+            "    @staticmethod\n"
+            "    def helper(x: torch.Tensor) -> int:\n"
+            "        scaled = x * 2\n"
+            "        return scaled.numel()\n\n\n"
+            "RUNNER = Runner()\n\n\n"
+            + RUN_HEAD + "    total = RUNNER.helper(x)\n" + launch,
+        ),
+        (
+            "an unknown argument is not treated as a scalar",
+            False,
+            "_BOUND = torch.empty(2)\n\n\n"
+            "def plan(rows) -> int:\n"
+            "    return (rows + 1) % 4\n\n\n"
+            + RUN_HEAD + "    total = plan(_BOUND)\n" + launch,
+        ),
+    ]
+
+
+def _collection_scope_cases() -> list[tuple[str, bool, str]]:
+    """Return (label, expect_clean, host source) for collection scope."""
+    run = (
+        "def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:\n"
+        "    total = x.numel()\n"
+        "    _KERNELS[0][1, rt.current_stream()](x, y, total)"
+    )
+    return [
+        (
+            "a kernel collection at module level is accepted",
+            True,
+            "_KERNELS = (a_kernel, b_kernel)\n\n\n" + run,
+        ),
+        (
+            "a kernel collection inside a module-level conditional is accepted",
+            True,
+            "if hasattr(asc, 'mul'):\n"
+            "    _KERNELS = (a_kernel, b_kernel)\n\n\n" + run,
+        ),
+        (
+            "a class-scoped collection is not a module-level collection",
+            False,
+            "class Holder:\n"
+            "    _KERNELS = (a_kernel, b_kernel)\n\n\n"
+            "def run(x: torch.Tensor, y: torch.Tensor, slope: float = 0.01) -> None:\n"
+            "    total = x.numel()\n"
+            "    Holder._KERNELS[0][1, rt.current_stream()](x, y, total)",
+        ),
+    ]
+
+
+
 def main() -> int:
     asc = (ROOT / "src/prompts/examples/001_elementwise_add/custom_op.asc").read_text()
     asc_wrapper = (
@@ -226,6 +314,18 @@ def main() -> int:
         r"^\s*add_kernel\[[^\n]*\n", "        pass\n", add_kernel, flags=re.M
     )
     assert "add_kernel[" not in never_launches
+    for label, clean, host_source in _helper_cases():
+        source = BASE_KERNEL + host_source
+        if clean:
+            expect_clean(label, Backend.PYASC, source, ALIASED_WRAPPER)
+        else:
+            expect_rejected(label, source, ALIASED_WRAPPER)
+    for label, clean, host_source in _collection_scope_cases():
+        source = BASE_KERNEL + host_source
+        if clean:
+            expect_clean(label, Backend.PYASC, source, ALIASED_WRAPPER)
+        else:
+            expect_rejected(label, source, ALIASED_WRAPPER)
     expect_rejected("launcher that never launches", never_launches, add_wrapper)
 
     hidden = add_kernel.replace(
@@ -262,12 +362,24 @@ def main() -> int:
         NESTED_AND_DELEGATED_KERNEL,
         NESTED_AND_DELEGATED_WRAPPER,
     )
+    # An unannotated parameter is scalar only when its call sites pass
+    # scalars: the same function is accepted when it receives `x.numel()` and
+    # rejected when it receives the tensor itself.
+    expect_clean(
+        "an unannotated launcher parameter fed a scalar is accepted",
+        Backend.PYASC,
+        NESTED_AND_DELEGATED_KERNEL.replace(
+            "def _launch(x, z, total: int) -> None:",
+            "def _launch(x, z, total) -> None:",
+        ),
+        NESTED_AND_DELEGATED_WRAPPER,
+    )
     expect_rejected(
         "tensor arithmetic on an unannotated launcher parameter is still rejected",
         NESTED_AND_DELEGATED_KERNEL.replace(
             "def _launch(x, z, total: int) -> None:",
             "def _launch(x, z, total) -> None:",
-        ),
+        ).replace("    _launch(x, z, x.numel())", "    _launch(x, z, x)"),
         NESTED_AND_DELEGATED_WRAPPER,
     )
     expect_clean(
