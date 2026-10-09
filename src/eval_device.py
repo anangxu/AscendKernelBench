@@ -12,15 +12,27 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from .backend import Backend, kernel_file, parse_backend
+from .backend import (
+    Backend,
+    BuildBackend,
+    kernel_file,
+    parse_backend,
+    parse_build_backend,
+)
 from .build import (
     BuildError,
     LoadError,
     build_custom_op,
     load_custom_op,
     split_asc_source,
+)
+from .config import DeepJitConfig
+from .deepjit_build import (
+    DeepJitBuildError,
+    prepare_deepjit_module,
+    read_build_facts,
 )
 from .compare import (
     HIDDEN_DISTRIBUTIONS,
@@ -130,6 +142,8 @@ class DeviceEvalRequest(BaseModel):
     peak_tflops: float = 0.0
     l2_clear_size: int = 256 * 1024 * 1024
     backend: str = "ascendc"
+    build_backend: str = "cmake"
+    deepjit: dict[str, Any] = Field(default_factory=dict)
     soc_version: str = ""
 
 
@@ -167,6 +181,8 @@ class SampleEvaluator:
         """Bind the request; runtime objects are filled during run."""
         self.req = request
         self.backend = parse_backend(request.backend)
+        self.build_backend = parse_build_backend(request.build_backend)
+        self.deepjit = DeepJitConfig.model_validate(request.deepjit)
         self.kernel_module: Any = None
         self.sample_path = Path(request.sample_dir)
         self.so_path: Path | None = None
@@ -280,9 +296,25 @@ class SampleEvaluator:
         )
 
     def _build_and_load(self) -> dict[str, Any] | None:
-        """Compile and load the backend's kernel; fail-payload on error."""
+        """Compile and load the backend's kernel; fail-payload on error.
+
+        The Ascend C path runs in two steps: the host library is built and
+        loaded first, then the device kernel is compiled. Only the device
+        step sets compiled, because a host library alone proves nothing about
+        the kernel the benchmark measures.
+        """
         if self.backend is Backend.PYASC:
             return self._load_pyasc()
+        if self.build_backend is BuildBackend.DEEPJIT and self.backend is not (
+            Backend.ASCENDC
+        ):
+            return fail_result(
+                compilation_error=(
+                    "build_backend=deepjit builds custom_op.asc and cannot be "
+                    f"combined with backend={self.backend.value}"
+                ),
+                failure_stage="static_check",
+            )
         try:
             asc_source = (self.sample_path / "custom_op.asc").read_text(
                 encoding="utf-8"
@@ -297,6 +329,8 @@ class SampleEvaluator:
         self.metadata["build_mode"] = (
             "split" if split_asc_source(asc_source) is not None else "legacy"
         )
+        self.metadata["build_backend"] = self.build_backend.value
+        deepjit_build = self.build_backend is BuildBackend.DEEPJIT
         started = time.monotonic()
         try:
             self.so_path = build_custom_op(
@@ -304,20 +338,57 @@ class SampleEvaluator:
                 self.sample_path,
                 cmake_arch=self.req.cmake_arch,
                 timeout_s=self.req.build_timeout,
+                build_backend=self.build_backend,
+                deepjit=self.deepjit,
+                soc_version=self.req.soc_version,
             )
-            # The build produced a library: for Ascend C that is the compile
-            # step, and a later load failure still reports compiled=True.
-            self.compiled = True
-            load_custom_op(self.so_path, asc_source)
         except (BuildError, OSError) as exc:
             return fail_result(compilation_error=str(exc))
+        finally:
+            # A host library is not a compiled kernel on the DeepJIT path, so
+            # this figure stays a host build time until the device step runs.
+            self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
+        if deepjit_build:
+            self.metadata.update(read_build_facts(self.sample_path))
+        try:
+            load_custom_op(self.so_path, asc_source)
         except LoadError as exc:
             return fail_result(
                 compiled=True,
                 runtime_error=f"shared library load failed: {exc}",
+                failure_stage="module_load",
+            )
+        if deepjit_build:
+            return self._prepare_deepjit()
+        # The CMake template compiles the device kernel inside the host build,
+        # so a produced and loaded library is the compile step.
+        self.compiled = True
+        return None
+
+    def _prepare_deepjit(self) -> dict[str, Any] | None:
+        """Compile the device kernel through the framework prepare entry.
+
+        Nothing is launched here. DeepJIT queries the device for its compiler
+        defaults, so the NPU context has to be current first; a failure is a
+        compile failure of the candidate's device source, so the sample is
+        reported as not compiled together with the compiler output.
+        """
+        started = time.monotonic()
+        try:
+            self.torch.npu.set_device(npu_device_index(self.req.device))
+            prepare_deepjit_module(self.so_path)
+        except DeepJitBuildError as exc:
+            return fail_result(
+                compiled=False,
+                compilation_error=str(exc),
+                failure_stage="device_compile",
+                build_backend=self.build_backend.value,
             )
         finally:
-            self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
+            self.metadata["device_compile_seconds"] = round(
+                time.monotonic() - started, 3
+            )
+        self.compiled = True
         return None
 
     def _load_pyasc(self) -> dict[str, Any] | None:

@@ -30,6 +30,9 @@ KernelBench task + hardware profile
   -> isolated worker (scripts/_eval_worker.py)
   -> Ascend C: build.py + build_template/ -> libcustom_op.so -> load_library
        (marked sources: split kernel/launcher/host units + shared host PCH)
+  -> Ascend C + build_backend=deepjit: build.py -> deepjit_build.py ->
+       extension with the embedded DeepJIT runtime -> prepare compiles the
+       device kernel -> generated launch stubs (docs/guide/deepjit.md)
   -> pyasc:    pyasc_runtime.py -> kernel.py imported; the first call JITs
   -> eval_device.py: seeded correctness -> hidden value gate
        (d1..d4) -> NPU-event timing -> fresh-input re-check
@@ -90,6 +93,10 @@ CLI facts worth remembering:
   `--hardware`. Generation also selects tasks with `--tasks-file` and
   forwards `--max-tokens` / `--reasoning-effort` to the endpoint; both are
   recorded in the run's `generation_config.yaml`.
+* `scripts/generate.py --build-backend deepjit` (with `--deepjit-root` and an
+  optional `--deepjit-commit`) records the build backend and the DeepJIT
+  settings in the run; `scripts/evaluate.py` reads them from there. `cmake`
+  stays the default, and the DeepJIT path never replaces pyasc.
 * Response parsing accepts a JSON object holding `custom_op_asc` and
   `model_new_py`, or two fenced code blocks. Endpoints that reject
   `response_format` (DeepSeek-compatible ones) answer the structured request
@@ -107,6 +114,7 @@ CLI facts worth remembering:
 | `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `pyasc.py` (pyasc kernel, launcher, and call graph), `python_source.py`/`text.py` (entry points and masking). |
 | `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
 | `src/pyasc_runtime.py` | Worker-side pyasc runtime: sample-local JIT cache, real-file kernel import, platform and device selection, first-call timing. |
+| `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, generated runtime/launcher, host extension build, and the framework prepare entry. |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
@@ -114,7 +122,7 @@ CLI facts worth remembering:
 | `configs/subsets/*.txt` | Fixed task subsets for comparable runs. `level1_20.txt` is every fifth level1 task, loaded with `--tasks-file`. Keep the lists stable. |
 | `requirements.txt` | Third-party dependencies; the only pip install file. |
 | `.pre-commit-config.yaml` | Optional Ruff and basic file hooks on `src/` and `scripts/`. |
-| `build_template/CMakeLists.txt` | The single build path that produces `libcustom_op.so`. |
+| `build_template/CMakeLists.txt` | The default build path that produces `libcustom_op.so`; `build_backend=deepjit` uses `deepjit_build.py` instead. |
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 
@@ -162,7 +170,13 @@ root (`src/` sits directly under that root).
     `kernel_fn[core_num](...)` compiles and launches, so a successful import
     is never reported as a compiled sample. `first_call_seconds` is a compound
     trace+compile+launch figure and must not be called a compile time.
-11. **CPU-reference fallback is not a free pass.** It only changes the
+11. **The deepjit build path is opt-in and framework-owned.** It applies to
+    the Ascend C backend only, one run records one build backend, and the
+    framework owns the DeepJIT runtime, the kernel source, and the cache:
+    candidates never run build commands. An unsupported source is refused
+    with an explicit build error; it never falls back to CMake, and a
+    missing DeepJIT checkout never affects the CMake path.
+12. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
 
 ## Conventions
@@ -212,7 +226,7 @@ root (`src/` sits directly under that root).
 | Scoring change | `score.py` / `sol.py` + `docs/guide/results.md` + README metrics table. |
 | Prompt or output contract | `prompt.py` (`SYSTEM_PROMPT`, `OUTPUT_CONTRACT`) + `prompts/examples/` + docs. |
 | New CLI flag | Thin `scripts/*.py` argparse + `cli_util.py` factory + `docs/reference/cli.md`. |
-| Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`. |
+| Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`; the optional DeepJIT path adds `deepjit_build.py` + `docs/guide/deepjit.md`. |
 | New task | Add to `KernelBench/levelN/` keeping `Model`, `get_inputs`, `get_init_inputs`; see `docs/task_authoring.md`. Task source is validated statically and never executed at load time. |
 | New comparison subset | `configs/subsets/<name>.txt` + `docs/guide/workflows.md`. Fix the sampling rule in the manifest header and keep the list stable. |
 
@@ -259,6 +273,12 @@ root (`src/` sits directly under that root).
   breakdown and the rejected alternatives are in
   `docs/guide/troubleshooting.md`; the measured numbers are for this host, so
   re-measure before quoting them elsewhere.
+* The DeepJIT build path is verified on an Ascend 910B4 host (20 AI cores,
+  40 vector cores, 29.5 GiB HBM, CANN 9.1.0) with the host toolchain prefix
+  described in `docs/guide/deepjit.md`; DeepJIT commit
+  `3732a3b9a0a2e5126396908a362ba5abdf043b2f` is the verified pin. Level-1
+  activation tasks hold 6 GiB per tensor, which does not fit that device
+  during the hidden-distribution stage.
 * The DeepSeek endpoint used for the reference run is
   `https://api.deepseek.com/v1` with `OPENAI_API_KEY` set from the
   session's `ANTHROPIC_AUTH_TOKEN`; `deepseek-flash` accepts

@@ -14,6 +14,11 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ._paths import EVAL_DEFAULT_CONFIG, HARDWARE_DIR
+from .backend import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
+    parse_build_backend,
+)
 
 
 def _default_tolerances() -> dict[str, dict[str, float]]:
@@ -68,6 +73,30 @@ class HardwareProfile(BaseModel):
         return float(self.peak_tflops.get(precision, 0.0) or 0.0)
 
 
+class DeepJitConfig(BaseModel):
+    """Local DeepJIT settings for the optional deepjit build backend.
+
+    Every path is local configuration, never a repository default: the
+    checkout location, the isolated host toolchain, and its runtime library
+    directories differ per machine. Empty fields fall back to environment
+    variables (DEEPJIT_ROOT, DEEPJIT_COMMIT, DEEPJIT_CXX, DEEPJIT_CACHE_DIR)
+    so a machine can be configured without editing tracked YAML.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    root: str = ""
+    commit: str = ""
+    cxx: str = ""
+    include_dirs: list[str] = Field(default_factory=list)
+    library_dirs: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    extra_cflags: list[str] = Field(default_factory=list)
+    extra_ldflags: list[str] = Field(default_factory=list)
+    cache_dir: str = ""
+    build_timeout: int = 1800
+
+
 class EvalConfig(BaseModel):
     """Evaluation defaults for one benchmark run."""
 
@@ -83,7 +112,21 @@ class EvalConfig(BaseModel):
     excessive_speedup: float = 10.0
     build_timeout: int = 600
     eval_timeout: int = 300
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND
+    deepjit: DeepJitConfig = Field(default_factory=DeepJitConfig)
     generation: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("build_backend", mode="before")
+    @classmethod
+    def _build_backend_value(cls, value: object) -> object:
+        """Accept a backend name, a member, or an absent value."""
+        return parse_build_backend(value)
+
+    @field_validator("deepjit", mode="before")
+    @classmethod
+    def _deepjit_mapping(cls, value: object) -> object:
+        """Treat a missing or null deepjit block as empty settings."""
+        return value if isinstance(value, dict) else {}
 
     @field_validator("generation", mode="before")
     @classmethod

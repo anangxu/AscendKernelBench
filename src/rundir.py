@@ -16,7 +16,13 @@ import yaml
 
 from . import backend as backend_module
 from ._paths import RUNS_DIR
-from .backend import DEFAULT_BACKEND, Backend, parse_backend
+from .backend import (
+    DEFAULT_BACKEND,
+    Backend,
+    BuildBackend,
+    parse_backend,
+    parse_build_backend,
+)
 from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
 
 
@@ -136,7 +142,29 @@ _HARNESS_KEYS = (
     "reasoning_effort",
     "max_tokens",
     "backend",
+    "build_backend",
 )
+
+
+def generation_build_backend(run_dir: Path) -> BuildBackend | None:
+    """Return the build backend recorded for a run, or None when absent.
+
+    Runs older than the build_backend field carry no value; callers fall back
+    to the evaluation config default.
+
+    Raises:
+        ValueError: If the recorded value is not a known build backend.
+    """
+    value = _read_generation_config(run_dir).get("build_backend")
+    if value is None or not str(value).strip():
+        return None
+    return parse_build_backend(value)
+
+
+def generation_deepjit(run_dir: Path) -> dict[str, Any]:
+    """Return the DeepJIT settings recorded for a run, if any."""
+    value = _read_generation_config(run_dir).get("deepjit")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def generation_harness(run_dir: Path) -> dict[str, Any]:

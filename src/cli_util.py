@@ -11,8 +11,16 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from . import rundir
-from .backend import DEFAULT_BACKEND, Backend, parse_backend
+from .backend import (
+    DEFAULT_BACKEND,
+    DEFAULT_BUILD_BACKEND,
+    Backend,
+    BuildBackend,
+    parse_backend,
+    parse_build_backend,
+)
 from .config import (
+    DeepJitConfig,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
@@ -75,6 +83,8 @@ class GenerationSettings(BaseModel):
     num_samples: int
     reasoning_effort: str | None = None
     backend: Backend = DEFAULT_BACKEND
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND
+    deepjit: dict[str, object] = {}
 
 
 def resolve_generation_settings(
@@ -87,10 +97,29 @@ def resolve_generation_settings(
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
     backend: str | None = None,
+    build_backend: str | None = None,
+    deepjit_root: str | None = None,
+    deepjit_commit: str | None = None,
 ) -> GenerationSettings:
     """Resolve generation settings from YAML with optional CLI overrides."""
     gen_cfg = dict(config.generation)
     effort = reasoning_effort or str(gen_cfg.get("reasoning_effort", "")).strip()
+    resolved_build_backend = parse_build_backend(
+        build_backend if build_backend is not None else config.build_backend
+    )
+    deepjit: dict[str, object] = {}
+    if resolved_build_backend is BuildBackend.DEEPJIT:
+        values = config.deepjit.model_copy(
+            update={
+                key: value
+                for key, value in (
+                    ("root", deepjit_root),
+                    ("commit", deepjit_commit),
+                )
+                if value
+            }
+        )
+        deepjit = values.model_dump()
     return GenerationSettings(
         model=model or str(gen_cfg.get("model", "deepseek-flash")),
         prompt_mode=prompt_mode or str(gen_cfg.get("prompt_mode", "one_shot")),
@@ -109,6 +138,8 @@ def resolve_generation_settings(
         ),
         reasoning_effort=effort or None,
         backend=resolve_backend(backend, gen_cfg.get("backend")),
+        build_backend=resolved_build_backend,
+        deepjit=deepjit,
     )
 
 
@@ -203,8 +234,11 @@ def generation_run_config(
         "num_samples": settings.num_samples,
         "reasoning_effort": settings.reasoning_effort,
         "backend": settings.backend.value,
+        "build_backend": settings.build_backend.value,
         "hardware": hardware_name,
         "tasks": list(task_ids),
     }
+    if settings.deepjit:
+        payload["deepjit"] = dict(settings.deepjit)
     payload.update(extra)
     return payload

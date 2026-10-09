@@ -29,6 +29,32 @@ build_timeout: 600
 eval_timeout: 300
 ############################ TIMEOUTS #############################
 
+########################### BUILD PATH ############################
+# build_backend selects how custom_op.asc becomes a loadable library:
+# cmake (default, the CMake template) or deepjit (the optional DeepJIT path,
+# docs/guide/deepjit.md). The deepjit block holds local machine settings
+# only; every path is empty here so nothing machine-specific is committed.
+# A run records its build_backend at generation time and evaluation reads it
+# from the run, so generation records it too (--build-backend).
+build_backend: cmake
+deepjit:
+  # DeepJIT checkout holding include/deep_jit (DEEPJIT_ROOT).
+  root: ""
+  # Optional pin; a mismatch with the checkout is refused (DEEPJIT_COMMIT).
+  commit: ""
+  # Host compiler for the extension; needs std::format, so GCC 13 or newer
+  # (DEEPJIT_CXX). The remaining paths are local toolchain configuration.
+  cxx: ""
+  include_dirs: []
+  library_dirs: []
+  env: {}
+  extra_cflags: []
+  extra_ldflags: []
+  # JIT artifact cache; empty means sample-local deepjit/cache (DEEPJIT_CACHE_DIR).
+  cache_dir: ""
+  build_timeout: 1800
+########################### BUILD PATH ############################
+
 ########################## GENERATION #############################
 # Thinking depth (low | medium | high); empty omits the parameter. Reasoning
 # tokens count against max_tokens, which is why the budget is this large.

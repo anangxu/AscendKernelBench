@@ -62,7 +62,9 @@ for Ascend C, not a CUDA-to-NPU score translator.
   scored sample records the protocol snapshot and software stack used to
   produce it.
 - **English generation prompts** and a fixed CMake template. The model
-  writes `custom_op.asc` and `model_new.py` only.
+  writes `custom_op.asc` and `model_new.py` only. Ascend C samples may also
+  be built through the optional DeepJIT path
+  (`--build-backend deepjit`, see `docs/guide/deepjit.md`).
 
 The current workflow supports generation and evaluation scripts. It does
 not implement an automatic compile-error repair agent.

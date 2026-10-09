@@ -14,14 +14,17 @@ from typing import Any
 from loguru import logger
 
 from . import rundir
-from .backend import DEFAULT_BACKEND, Backend, sample_files
+from .backend import DEFAULT_BACKEND, DEFAULT_BUILD_BACKEND, Backend, BuildBackend
+from .backend import sample_files
 from .checker import check_sample_sources
 from .config import (
+    DeepJitConfig,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
     load_hardware_profile,
 )
+from .deepjit_build import resolve_deepjit_settings
 from .dataset import Task, load_task
 from .eval_device import eval_sample_on_device
 from .eval_result import fail_result
@@ -48,14 +51,48 @@ def _persist_eval_result(sample_dir: Path, result: dict[str, Any]) -> dict[str, 
 
 def _load_run_settings(
     run_dir: Path,
-) -> tuple[EvalConfig, HardwareProfile, Backend]:
-    """Load the default protocol, the run's hardware, and its backend."""
+) -> tuple[EvalConfig, HardwareProfile, Backend, BuildBackend, DeepJitConfig]:
+    """Load the protocol, the run's hardware, backend, and build backend."""
     config = load_eval_config()
     hw_name = rundir.generation_hardware_name(run_dir) or config.hardware
     # One backend for discovery and execution; a run whose recorded backend and
     # artifacts disagree raises here instead of evaluating with the wrong one.
     backend = rundir.resolve_run_backend(run_dir)
-    return config, load_hardware_profile(hw_name), backend
+    build_backend, deepjit = _resolve_build_settings(run_dir, config, backend)
+    return config, load_hardware_profile(hw_name), backend, build_backend, deepjit
+
+
+def _resolve_build_settings(
+    run_dir: Path,
+    config: EvalConfig,
+    backend: Backend,
+) -> tuple[BuildBackend, DeepJitConfig]:
+    """Resolve the build backend and DeepJIT settings for one run.
+
+    The run record wins over the evaluation config, so one run keeps the same
+    build path no matter how the config file changed since.
+
+    Raises:
+        ValueError: If the combination is unsupported or DeepJIT is selected
+            without a checkout to build against.
+    """
+    build_backend = rundir.generation_build_backend(run_dir) or config.build_backend
+    if build_backend is BuildBackend.DEEPJIT and backend is not Backend.ASCENDC:
+        raise ValueError(
+            f"build_backend={BuildBackend.DEEPJIT.value} builds custom_op.asc "
+            f"and cannot be combined with backend={backend.value}"
+        )
+    recorded = rundir.generation_deepjit(run_dir)
+    settings = resolve_deepjit_settings(
+        DeepJitConfig.model_validate({**config.deepjit.model_dump(), **recorded})
+    )
+    if build_backend is BuildBackend.DEEPJIT and not settings.root:
+        raise ValueError(
+            "build_backend=deepjit needs a DeepJIT checkout: set deepjit.root "
+            "in the evaluation config, record it in the run, or export "
+            "DEEPJIT_ROOT"
+        )
+    return build_backend, settings
 
 
 def eval_sample(
@@ -65,6 +102,8 @@ def eval_sample(
     hardware: HardwareProfile,
     config: EvalConfig,
     backend: Backend = DEFAULT_BACKEND,
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
+    deepjit: DeepJitConfig | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
 
@@ -111,6 +150,8 @@ def eval_sample(
             "task_py": task.task_py,
             "sample_dir": str(sample_dir),
             "backend": backend.value,
+            "build_backend": build_backend.value,
+            "deepjit": (deepjit or DeepJitConfig()).model_dump(),
             "cmake_arch": hardware.cmake_arch,
             "hardware_name": hardware.name,
             "soc_version": hardware.soc_version,
@@ -155,7 +196,7 @@ def evaluate_run(
             run records an unknown backend.
     """
     run_dir = rundir.resolve_run(run)
-    config, hardware, backend = _load_run_settings(run_dir)
+    config, hardware, backend, build_backend, deepjit = _load_run_settings(run_dir)
     samples = list(rundir.iter_sample_dirs(run_dir, level=level, backend=backend))
     if not samples:
         if level is not None:
@@ -170,10 +211,13 @@ def evaluate_run(
             hardware=hardware,
             config=config,
             backend=backend,
+            build_backend=build_backend,
+            deepjit=deepjit,
         )
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
             metadata["backend"] = backend.value
+            metadata["build_backend"] = build_backend.value
             if harness:
                 metadata["harness"] = harness
             write_json_atomic(sample_path / "eval_result.json", result)

@@ -20,7 +20,21 @@ class Backend(str, Enum):
     PYASC = "pyasc"
 
 
+class BuildBackend(str, Enum):
+    """How the Ascend C backend turns custom_op.asc into a loadable library.
+
+    cmake stays the default so every existing run keeps its meaning. deepjit
+    is an opt-in alternative that compiles the same source through the
+    DeepJIT runtime instead of the CMake template; it is unrelated to pyasc,
+    which never builds a shared library.
+    """
+
+    CMAKE = "cmake"
+    DEEPJIT = "deepjit"
+
+
 DEFAULT_BACKEND = Backend.ASCENDC
+DEFAULT_BUILD_BACKEND = BuildBackend.CMAKE
 
 # Kernel artifact per backend, relative to one sample directory. The wrapper
 # name is shared: both backends call the compiled kernel from model_new.py.
@@ -81,3 +95,27 @@ def kernel_field(backend: Backend) -> str:
 def sample_files(backend: Backend) -> tuple[str, str]:
     """Return the two artifact filenames that make a sample complete."""
     return kernel_file(backend), WRAPPER_FILE
+
+
+def parse_build_backend(value: object) -> BuildBackend:
+    """Resolve a build-backend value, defaulting when absent.
+
+    Raises:
+        ValueError: If the value is not a known build backend, or if the
+            DeepJIT path is combined with the pyasc authoring backend.
+    """
+    if isinstance(value, BuildBackend):
+        return value
+    if value is None:
+        return DEFAULT_BUILD_BACKEND
+    text = str(value).strip().lower()
+    if not text:
+        return DEFAULT_BUILD_BACKEND
+    try:
+        return BuildBackend(text)
+    except ValueError:
+        supported = ", ".join(item.value for item in BuildBackend)
+        raise ValueError(
+            f"Unknown build backend {value!r}; supported build backends are: "
+            f"{supported}"
+        ) from None

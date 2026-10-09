@@ -42,6 +42,23 @@ A task's nonempty `TOLERANCE` mapping takes precedence over configured tolerance
 
 Use positive trial counts and timeouts. Set `num_warmup` to a nonnegative integer. Configuration changes alter the evaluation protocol; preserve the exact YAML used when comparing results.
 
+## Build path settings
+
+| Key | Default | Used by |
+| --- | --- | --- |
+| `build_backend` | `cmake` | `generate.py` or `--build-backend`, recorded in the run, read by `evaluate.py` |
+| `deepjit.root` | empty (or `DEEPJIT_ROOT`) | the `deepjit` build path |
+| `deepjit.commit` | empty (or `DEEPJIT_COMMIT`) | the `deepjit` build path |
+| `deepjit.cxx` | empty (or `DEEPJIT_CXX`) | the `deepjit` build path |
+| `deepjit.include_dirs`, `deepjit.library_dirs` | empty | the `deepjit` build path |
+| `deepjit.env` | empty | environment applied inside the worker process for the build and the run |
+| `deepjit.extra_cflags`, `deepjit.extra_ldflags` | empty | the `deepjit` build path |
+| `deepjit.cache_dir` | empty (sample-local `deepjit/cache`) | the `deepjit` build path |
+| `deepjit.build_timeout` | `1800` | the `deepjit` build path |
+
+`build_backend` is opt-in per run and applies to the Ascend C backend only;
+pyasc never builds a shared library. See the [DeepJIT guide](../guide/deepjit.md).
+
 ## Generation settings
 
 These are nested under `generation`:

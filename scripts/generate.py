@@ -14,7 +14,7 @@ from loguru import logger
 from rich.console import Console
 
 from src import rundir
-from src.backend import Backend
+from src.backend import Backend, BuildBackend
 from src.cli_util import (
     cli_progress,
     generation_run_config,
@@ -67,6 +67,22 @@ def main() -> None:
         choices=[backend.value for backend in Backend],
         help="authoring language: ascendc (default) or pyasc",
     )
+    parser.add_argument(
+        "--build-backend",
+        default=None,
+        choices=[item.value for item in BuildBackend],
+        help="how custom_op.asc is built: cmake (default) or deepjit",
+    )
+    parser.add_argument(
+        "--deepjit-root",
+        default=None,
+        help="DeepJIT checkout used by --build-backend deepjit",
+    )
+    parser.add_argument(
+        "--deepjit-commit",
+        default=None,
+        help="pinned DeepJIT commit; a mismatch with the checkout is refused",
+    )
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
@@ -86,6 +102,9 @@ def main() -> None:
             reasoning_effort=args.reasoning_effort,
             max_tokens=args.max_tokens,
             backend=args.backend,
+            build_backend=args.build_backend,
+            deepjit_root=args.deepjit_root,
+            deepjit_commit=args.deepjit_commit,
         )
     except ValueError as exc:
         die(str(exc))
