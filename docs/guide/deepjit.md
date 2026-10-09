@@ -55,7 +55,9 @@ never builds a shared library.
 3. The worker loads it with `torch.ops.load_library`.
 4. The framework prepare entry `akb_deepjit_prepare()` compiles the device
    kernel through DeepJIT. Nothing is launched and no candidate code runs
-   before it. Only this step sets `compiled`.
+   before it. Only this step sets `compiled`. The entry is called across a C
+   ABI, so it catches every C++ exception and returns a status code plus a
+   message instead of unwinding out of the boundary.
 5. The candidate's `model_new.py` calls the operator; the generated
    `<kernel>_launch(...)` stub launches through DeepJIT.
 
@@ -73,6 +75,12 @@ Files the framework generates under `<sample>/deepjit/`:
 
 The candidate never runs a build command, never chooses the DeepJIT root, and
 never sees the runtime headers.
+
+The launch stub resolves its kernel handle from a per-process cache that
+prepare fills, so a timed launch cannot reach the compiler or the include
+parser. The stub passes the stream it is handed into the launch options; the
+generated sources contain no device-wide synchronize, so a wrong stream
+cannot be hidden by one.
 
 ## Source rules
 
