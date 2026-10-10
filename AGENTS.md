@@ -231,7 +231,7 @@ root (`src/` sits directly under that root).
 | New hardware profile | `configs/hardware/<name>.yaml`; fields must satisfy `config.HardwareProfile`; mirror the comments in `ascend910b2.yaml`. |
 | Protocol/timeout/trial change | `configs/eval_default.yaml` + `timing.py`/`eval.py` + `docs/guide/evaluation.md`. |
 | Scoring change | `score.py` / `sol.py` + `docs/guide/results.md` + README metrics table. |
-| Prompt or output contract | `prompt.py` (`SYSTEM_PROMPT`, `OUTPUT_CONTRACT`) + `prompts/examples/` + docs. |
+| Prompt or output contract | `prompt.py` (`SYSTEM_PROMPT`, `OUTPUT_CONTRACT`, and their deepjit and pyasc twins) + `prompts/examples/` (top level, `pyasc/`, `deepjit/`) + docs. |
 | New CLI flag | Thin `scripts/*.py` argparse + `cli_util.py` factory + `docs/reference/cli.md`. |
 | Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`; the optional DeepJIT path adds `deepjit_build.py` + `docs/guide/deepjit.md` + `tests/test_deepjit_bridge.py`. |
 | New task | Add to `KernelBench/levelN/` keeping `Model`, `get_inputs`, `get_init_inputs`; see `docs/task_authoring.md`. Task source is validated statically and never executed at load time. |
@@ -280,6 +280,9 @@ root (`src/` sits directly under that root).
   breakdown and the rejected alternatives are in
   `docs/guide/troubleshooting.md`; the measured numbers are for this host, so
   re-measure before quoting them elsewhere.
+* Generation reads its credential from a machine-local file (this checkout
+  uses a key file outside the repository) and passes it to LLMClient
+  explicitly, so no key is written into a run or a result.
 * The DeepJIT build path is verified on an Ascend 910B4 host (20 AI cores,
   40 vector cores, 29.5 GiB HBM, CANN 9.1.0) with the host toolchain prefix
   described in `docs/guide/deepjit.md`; DeepJIT commit

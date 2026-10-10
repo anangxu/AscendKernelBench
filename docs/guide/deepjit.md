@@ -82,6 +82,28 @@ parser. The stub passes the stream it is handed into the launch options; the
 generated sources contain no device-wide synchronize, so a wrong stream
 cannot be hidden by one.
 
+## Generation
+
+Generation follows the same three steps as the CMake path, with the deepjit
+wording and example pool:
+
+```bash
+python scripts/generate.py --task level1/19_ReLU --model <model> \
+    --build-backend deepjit --deepjit-root <checkout> --run-name relu_deepjit
+```
+
+`build_prompt`, `PromptBuilder`, and `system_prompt` take `build_backend`, so
+the prompt states the conventions this page describes: the two markers, one
+entry per compiled unit, the shared preamble, per-unit scope with host-side
+constant repetition, the supported parameter types, the generated launcher
+call, host-owned outputs and intermediates on the current stream, and the
+framework-owned build, cache, and prepare step. The cmake and pyasc wordings
+are unchanged, and each path reads its own example pool under
+`src/prompts/examples/`: the Ascend C pool at the top level, `pyasc/`, and
+`deepjit/`. The pools hold the verified assets only, and the existing
+`prompt_mode` rules still decide how many examples reach the prompt, so
+`one_shot` stays a single example.
+
 ## Source rules
 
 The device section may use angle-bracket includes and the standard quoted
