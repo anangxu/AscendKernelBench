@@ -29,8 +29,9 @@ from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
 # Generation settings that identify one run's harness. A continuation may add
 # tasks, but it may not change any of these, and it never rewrites a recorded
 # value: the first request recorded for a key stays authoritative.
+# The backend mismatch keeps its own established check and message in
+# _check_run_compatible, so it is deliberately not repeated here.
 _RUN_IDENTITY_KEYS = (
-    "backend",
     "build_backend",
     "hardware",
     "model",
