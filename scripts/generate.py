@@ -24,7 +24,7 @@ from src.cli_util import (
 )
 from src.llm import LLMClient
 from src.log import die, setup_logging
-from src.prompt import PYASC_SYSTEM_PROMPT, SYSTEM_PROMPT, build_prompt
+from src.prompt import build_prompt, system_prompt
 
 console = Console()
 
@@ -140,9 +140,7 @@ def main() -> None:
         reasoning_effort=settings.reasoning_effort,
         backend=settings.backend,
     )
-    system_prompt = (
-        PYASC_SYSTEM_PROMPT if settings.backend is Backend.PYASC else SYSTEM_PROMPT
-    )
+    system = system_prompt(settings.backend, settings.build_backend)
     total = len(tasks) * settings.num_samples
     failures = 0
     with cli_progress(console) as progress:
@@ -153,11 +151,12 @@ def main() -> None:
                 hardware,
                 mode=settings.prompt_mode,
                 backend=settings.backend,
+                build_backend=settings.build_backend,
             )
             for sample_id in range(settings.num_samples):
                 progress.update(bar, description=f"{task.task_id} s{sample_id}")
                 try:
-                    result = client.generate(prompt, system=system_prompt)
+                    result = client.generate(prompt, system=system)
                     rundir.save_sample(
                         run_dir,
                         task.task_id,

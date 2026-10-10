@@ -13,7 +13,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from ._paths import PROMPT_EXAMPLES_DIR
-from .backend import DEFAULT_BACKEND, Backend, parse_backend, sample_files
+from .backend import (
+    DEFAULT_BACKEND,
+    DEFAULT_BUILD_BACKEND,
+    Backend,
+    BuildBackend,
+    parse_backend,
+    parse_build_backend,
+    sample_files,
+)
 from .config import HardwareProfile
 from .dataset import Task
 
@@ -109,6 +117,126 @@ Ascend C API shown in the example. The evaluator will compile this file with
 its fixed CMake project into libcustom_op.so and load that library with
 torch.ops.load_library; you only write the two code blocks defined by the
 Output Contract.
+"""
+
+DEEPJIT_SYSTEM_PROMPT = (
+    "You are an expert Ascend C kernel engineer. You write correct, "
+    "high-performance Ascend C operators for Huawei Ascend NPUs. The "
+    "benchmark compiles the device units of your source with the DeepJIT "
+    "runtime and loads the resulting process-local shared library with "
+    "torch.ops.load_library inside the evaluating PyTorch process. Register "
+    "the operator with TORCH_LIBRARY / TORCH_LIBRARY_IMPL. Do not use "
+    "pybind11. The library is never installed into site-packages or the "
+    "global CANN OPP path."
+)
+
+DEEPJIT_OUTPUT_CONTRACT = """\
+## Output Contract
+
+The benchmark owns the build. You must NOT emit CMakeLists.txt, build
+scripts, op_host / op_kernel trees, framework plugins, deployment steps, or
+any file other than the two below. Output exactly two fenced code blocks,
+tagged with their filenames:
+
+1. ```custom_op.asc — one Ascend C source file in two sections, separated by
+   exactly one marker line (copy it verbatim):
+
+   // ==================== ASCEND_HOST_SECTION ====================
+
+   DEVICE SECTION (above the marker) — compiled without torch headers:
+   a. start with `#include "kernel_operator.h"`, then the kernel class
+      (`Init` for the data partition and GM buffers, `Process` for the UB
+      allocation, copy-in, compute, and copy-out), then the kernel entry;
+   b. entry functions are annotated `__global__ __vector__`, call
+      `AscendC::InitSocState()`, run `Init` and `Process`, and end with
+      `AscendC::PipeBarrier<PIPE_ALL>()`;
+   c. exactly one entry per compiled unit. For more than one kernel, separate
+      consecutive entries with this marker line (copy it verbatim):
+
+      // ==================== ASCEND_KERNEL_SECTION ====================
+
+      Everything before the first kernel marker is a shared preamble
+      (includes, constants, helper structs, `__aicore__` helper functions)
+      that is prepended to every unit; every segment after a marker holds
+      exactly one entry, and entry names must be distinct. A source with no
+      kernel marker is one unit;
+   d. keep every vector operand 32-byte aligned: index local tensors by
+      multiples of eight fp32 elements and size the partial buffers to match;
+   e. never include torch, ATen, or torch_npu headers in the device section.
+
+   HOST SECTION (below the marker) — compiled as plain C++17 and as a
+   separate translation unit from each device unit:
+   f. exactly these includes: `#include <torch/library.h>`,
+      `#include <ATen/ATen.h>`, and
+      `#include "torch_npu/csrc/core/npu/NPUStream.h"`;
+   g. repeat in the host section every constant it needs (tile sizes, lane
+      counts): the device section is a different translation unit and its
+      constants are not visible here;
+   h. host wrapper taking `const at::Tensor&` arguments, fetching the current
+      NPU stream via `c10_npu::getCurrentNPUStream().stream(false)`,
+      allocating every output and intermediate tensor itself, and launching
+      each kernel through its generated stub: for a kernel `foo(...)` call
+      `foo_launch(numBlocks, (void*)aclStream, <kernel args in order>)`.
+      The framework generates `foo_launch` from your signature, so never
+      declare or define it. Kernel pointer parameters (`__gm__ T*`) become
+      plain `T*` at the call site. When one kernel consumes what another
+      produced, launch both on that same stream in order and keep the
+      intermediate tensor alive until both launches are enqueued;
+   i. a process-local torch.library binding. Register the host function with
+      `TORCH_LIBRARY(custom_op, m)` and bind the NPU implementation with
+      `TORCH_LIBRARY_IMPL(custom_op, PrivateUse1, m)`. Do NOT use
+      `PYBIND11_MODULE` or any pybind11 header. The evaluator will
+      `torch.ops.load_library` the resulting library. The library namespace
+      MUST be `custom_op`. Exported function names are free (`run` is the
+      convention). Schema strings must match the host function (for example
+      `run(Tensor x) -> Tensor`). The host wrapper may only allocate memory
+      and launch kernels — all compute must happen inside the Ascend C
+      kernel, never in host-side ATen calls (`at::matmul`, `tensor.relu()`,
+      ...) or vendor prebuilt ops (`aclnn*`).
+   Supported device parameter types: `__gm__ uint8_t*`, `__gm__ int8_t*`,
+   `__gm__ float*`, `__gm__ int32_t*`, `__gm__ uint32_t*`, and the scalars
+   `int`, `int32_t`, `uint32_t`, `int64_t`, `float`. Array parameters are not
+   supported. Write includes in angle form, except the standard quoted
+   `#include "kernel_operator.h"` for that one header.
+
+   The build, the kernel cache, and the preparation step belong to the
+   framework: it compiles each entry before your wrapper runs, reuses cached
+   artifacts in later processes, and reports a compile failure per kernel.
+   Never emit your own compile, cache, or library-loading step, and never
+   assume the device source is compiled more than once per process.
+2. ```model_new.py — class `ModelNew` with the SAME `__init__` and `forward`
+   signatures as the reference `Model`. It is a thin wrapper: call
+   `torch.ops.custom_op.run(...)` (or the names you exported). The evaluator
+   already loaded the library with `torch.ops.load_library`. Do not
+   `import custom_op`, do not call `torch.ops.load_library`, do not change
+   `sys.path`, and do not install anything. Keep all optimisation work in
+   the `.asc` file.
+   - Parameters: if the reference `Model` has parameters (e.g. `nn.Conv2d`,
+     `nn.Linear`, norm layers), you MAY instantiate the same `nn` modules in
+     `ModelNew.__init__` as parameter containers — the evaluator seeds the
+     RNG identically before constructing `Model` and `ModelNew`, so identical
+     construction yields identical weights — but you must NEVER call them;
+     pass their `.weight`/`.bias` tensors into your custom op.
+
+Do not output any test code, `if __name__ == "__main__"` blocks, or prose
+between the two code blocks. In model_new.py, ALL tensor compute must go
+through `torch.ops.custom_op`: no torch native operators in any form —
+free functions (`torch.matmul`), tensor methods (`x.softmax(...)`), operators
+(`A @ B`, `A + B` on tensors), or comparisons on tensor data — and no
+nn.functional, torch_npu/aclnn shortcuts, CPU/NumPy fallbacks, try/except,
+dynamic imports (`importlib`, `__import__`, `getattr` on torch), or result
+caching. Integer shape arithmetic (shapes, strides, counts) is of course
+allowed.
+"""
+
+DEEPJIT_INSTRUCTION = """\
+## Instruction
+
+Implement the operator defined by the reference model above in Ascend C.
+Generate real, compilable code: every API you use must exist in the new-style
+Ascend C API shown in the example. The framework compiles each device entry
+with DeepJIT and loads the resulting library with torch.ops.load_library; you
+only write the two code blocks defined by the Output Contract.
 """
 
 PYASC_SYSTEM_PROMPT = (
@@ -236,8 +364,10 @@ class PromptExample(BaseModel):
     model_new_py: str
 
 
-# Backends whose examples live in a subdirectory, named after the backend.
-_BACKEND_EXAMPLE_SUBDIR = {Backend.PYASC: Backend.PYASC.value}
+# Example pools live in a subdirectory named after the backend, or after the
+# build path when one backend has two of them. The Ascend C pool is the top
+# level; pyasc and the deepjit Ascend C pool have their own directories.
+DEEPJIT_EXAMPLE_SUBDIR = "deepjit"
 
 
 def _backend_name(value: Backend | str) -> str:
@@ -250,25 +380,37 @@ def _resolve_backend(value: Backend | str) -> Backend:
     return parse_backend(_backend_name(value))
 
 
-def _example_pool_dir(backend: Backend) -> Path:
-    """Return the prompt-example directory that serves one backend."""
-    subdir = _BACKEND_EXAMPLE_SUBDIR.get(backend)
-    return PROMPT_EXAMPLES_DIR / subdir if subdir else PROMPT_EXAMPLES_DIR
+def _example_pool_dir(
+    backend: Backend, build_backend: BuildBackend = DEFAULT_BUILD_BACKEND
+) -> Path:
+    """Return the prompt-example directory that serves one build path."""
+    if backend is Backend.PYASC:
+        return PROMPT_EXAMPLES_DIR / Backend.PYASC.value
+    if build_backend is BuildBackend.DEEPJIT:
+        return PROMPT_EXAMPLES_DIR / DEEPJIT_EXAMPLE_SUBDIR
+    return PROMPT_EXAMPLES_DIR
 
 
-def load_examples(backend: Backend | str = DEFAULT_BACKEND) -> list[PromptExample]:
+def load_examples(
+    backend: Backend | str = DEFAULT_BACKEND,
+    build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
+) -> list[PromptExample]:
     """Load verified few-shot example assets shipped with the engine.
 
     Args:
-        backend: Authoring language whose examples are loaded. The Ascend C
-            pool is the top level of the examples directory; a backend with
-            its own subdirectory reads that subdirectory.
+        backend: Authoring language whose examples are loaded.
+        build_backend: Build path whose example pool is used. The Ascend C
+            CMake pool is the top level of the examples directory; pyasc and
+            the deepjit Ascend C path have their own subdirectories.
 
     Raises:
         OSError: If an example directory is missing a required file.
     """
     examples: list[PromptExample] = []
-    for example_dir in sorted(_example_pool_dir(_resolve_backend(backend)).iterdir()):
+    pool_dir = _example_pool_dir(
+        _resolve_backend(backend), parse_build_backend(build_backend)
+    )
+    for example_dir in sorted(pool_dir.iterdir()):
         if not example_dir.is_dir() or not (example_dir / "task.py").is_file():
             continue
         kernel_file, wrapper_file = sample_files(_resolve_backend(backend))
@@ -300,12 +442,14 @@ class PromptBuilder:
         hardware: HardwareProfile,
         *,
         backend: Backend | str = DEFAULT_BACKEND,
+        build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
         examples: list[PromptExample] | None = None,
     ) -> None:
-        """Bind the task, hardware profile, backend, and example override."""
+        """Bind the task, hardware, backend, build path, and example override."""
         self.task = task
         self.hardware = hardware
         self.backend = _resolve_backend(backend)
+        self.build_backend = parse_build_backend(build_backend)
         self._examples = examples
 
     def build(self, mode: str | PromptMode = PromptMode.ONE_SHOT) -> str:
@@ -329,9 +473,11 @@ class PromptBuilder:
         return "\n".join(sections)
 
     def _wording(self) -> tuple[str, str]:
-        """Return the (output contract, instruction) pair for this backend."""
+        """Return the (output contract, instruction) pair for this path."""
         if self.backend is Backend.PYASC:
             return PYASC_OUTPUT_CONTRACT, PYASC_INSTRUCTION
+        if self.build_backend is BuildBackend.DEEPJIT:
+            return DEEPJIT_OUTPUT_CONTRACT, DEEPJIT_INSTRUCTION
         return OUTPUT_CONTRACT, INSTRUCTION
 
     def _example_pool(self, mode: PromptMode) -> list[PromptExample]:
@@ -341,7 +487,7 @@ class PromptBuilder:
         pool = (
             self._examples
             if self._examples is not None
-            else load_examples(self.backend)
+            else load_examples(self.backend, self.build_backend)
         )
         if not pool:
             raise ValueError("no prompt examples available")
@@ -379,13 +525,19 @@ class PromptBuilder:
         return f"""\
 ## Target Hardware Contract
 
-- SoC: {hw.soc_version} (CMake arch `{hw.cmake_arch}`)
+- SoC: {hw.soc_version} ({self._arch_label()} `{hw.cmake_arch}`)
 - AI cores: {cores}; UB budget per core: {hw.ub_size_kb} KB
 - HBM: {hw.hbm_gb} GB, bandwidth ~{hw.memory_bandwidth_gbps} GB/s
 - Supported dtypes: {dtypes}
 
 {self._api_style_block()}
 """
+
+    def _arch_label(self) -> str:
+        """Return the arch field label for this build path."""
+        if self.build_backend is BuildBackend.DEEPJIT:
+            return "target arch"
+        return "CMake arch"
 
     def _api_style_block(self) -> str:
         """Return the API-style note for this backend."""
@@ -417,17 +569,36 @@ def build_prompt(
     *,
     mode: str = "one_shot",
     backend: Backend | str = DEFAULT_BACKEND,
+    build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
     examples: list[PromptExample] | None = None,
 ) -> str:
     """Assemble the full generation prompt for one task.
 
     Args:
         backend: Authoring language; a name or a Backend value.
+        build_backend: Build path whose wording and example pool are used.
 
     Raises:
-        ValueError: If mode or backend is unknown, or examples are missing.
+        ValueError: If mode, backend, or build backend is unknown, or
+            examples are missing.
     """
     resolved = _resolve_backend(backend)
-    return PromptBuilder(task, hardware, backend=resolved, examples=examples).build(
-        mode
-    )
+    return PromptBuilder(
+        task,
+        hardware,
+        backend=resolved,
+        build_backend=build_backend,
+        examples=examples,
+    ).build(mode)
+
+
+def system_prompt(
+    backend: Backend | str = DEFAULT_BACKEND,
+    build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
+) -> str:
+    """Return the system message for one backend and build path."""
+    if _resolve_backend(backend) is Backend.PYASC:
+        return PYASC_SYSTEM_PROMPT
+    if parse_build_backend(build_backend) is BuildBackend.DEEPJIT:
+        return DEEPJIT_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
