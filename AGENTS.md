@@ -45,7 +45,10 @@ For the Ascend C backend, `custom_op.asc` has two sections separated by one
 device kernels above (compiled without torch headers), torch glue below
 (compiled as plain C++ against the shared PCH). The host wrapper launches
 kernels through generated `<kernel>_launch(numBlocks, stream, args...)`
-stubs. Unmarked legacy sources still build as a single ASC unit.
+stubs. Unmarked legacy sources still build as a single ASC unit. The optional
+`// ==================== ASCEND_KERNEL_SECTION ====================` lines
+above the host marker split a multi-kernel device section into one deepjit
+compilation unit per entry; see `docs/guide/deepjit.md`.
 
 Current scope: generation and evaluation CLIs only. There is **no**
 automatic compile-error repair agent and no scheduler / multi-device queue.
@@ -114,7 +117,8 @@ CLI facts worth remembering:
 | `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `pyasc.py` (pyasc kernel, launcher, and call graph), `python_source.py`/`text.py` (entry points and masking). |
 | `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
 | `src/pyasc_runtime.py` | Worker-side pyasc runtime: sample-local JIT cache, real-file kernel import, platform and device selection, first-call timing. |
-| `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, generated runtime/launcher, host extension build, and the framework prepare entry. |
+| `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, per-kernel unit split, generated runtime/launcher, host extension build, and the framework prepare entry. |
+| `tests/` | No-device suites with plain asserts (`python tests/test_deepjit_bridge.py`); device behaviour is validated on an Ascend host, never here. |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
@@ -175,7 +179,10 @@ root (`src/` sits directly under that root).
     framework owns the DeepJIT runtime, the kernel source, and the cache:
     candidates never run build commands. An unsupported source is refused
     with an explicit build error; it never falls back to CMake, and a
-    missing DeepJIT checkout never affects the CMake path.
+    missing DeepJIT checkout never affects the CMake path. One compilation
+    unit per kernel entry: the split uses the explicit kernel-section marker
+    lines only, never a pattern that could cut a body, and every unit must
+    hold exactly one entry.
 12. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
 
@@ -226,7 +233,7 @@ root (`src/` sits directly under that root).
 | Scoring change | `score.py` / `sol.py` + `docs/guide/results.md` + README metrics table. |
 | Prompt or output contract | `prompt.py` (`SYSTEM_PROMPT`, `OUTPUT_CONTRACT`) + `prompts/examples/` + docs. |
 | New CLI flag | Thin `scripts/*.py` argparse + `cli_util.py` factory + `docs/reference/cli.md`. |
-| Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`; the optional DeepJIT path adds `deepjit_build.py` + `docs/guide/deepjit.md`. |
+| Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`; the optional DeepJIT path adds `deepjit_build.py` + `docs/guide/deepjit.md` + `tests/test_deepjit_bridge.py`. |
 | New task | Add to `KernelBench/levelN/` keeping `Model`, `get_inputs`, `get_init_inputs`; see `docs/task_authoring.md`. Task source is validated statically and never executed at load time. |
 | New comparison subset | `configs/subsets/<name>.txt` + `docs/guide/workflows.md`. Fix the sampling rule in the manifest header and keep the list stable. |
 

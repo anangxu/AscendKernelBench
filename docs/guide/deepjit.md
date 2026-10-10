@@ -65,7 +65,7 @@ Files the framework generates under `<sample>/deepjit/`:
 
 | File | Role |
 | --- | --- |
-| `akb_deepjit_kernel/kernel_0.hpp` | the device source that is actually compiled |
+| `akb_deepjit_kernel/kernel_{i}.hpp` | the device source actually compiled for kernel i |
 | `akb_deepjit_runtime.hpp` | framework runtime: Config, create_lazy_jit, compile, launch |
 | `akb_deepjit_launcher.cpp` | prepare entry plus one launch stub per kernel |
 | `akb_deepjit_launch_decls.h` | declarations force-included into the host TU |
@@ -90,12 +90,52 @@ The device section may use angle-bracket includes and the standard quoted
 includes. The rewritten file is what gets compiled. Any other quoted include
 is refused rather than rewritten.
 
-Exactly one `__global__ __vector__` entry is supported. Pointer parameters
-must be `__gm__` pointers to `uint8_t`, `int8_t`, `float`, `int32_t`, or
-`uint32_t`; scalar parameters must be `int`, `int32_t`, `uint32_t`, `int64_t`,
-or `float`. Anything else, a source without the host-section marker, or a
-path containing whitespace or shell metacharacters is reported as a build
-error. The path never falls back to CMake.
+Pointer parameters must be `__gm__` pointers to `uint8_t`, `int8_t`, `float`,
+`int32_t`, or `uint32_t`; scalar parameters must be `int`, `int32_t`,
+`uint32_t`, `int64_t`, or `float`. Anything else, a source without the
+host-section marker, or a path containing whitespace or shell metacharacters
+is reported as a build error. The path never falls back to CMake.
+
+## More than one kernel
+
+DeepJIT requires exactly one kernel entry per compiled artifact, so a
+multi-kernel sample is compiled as one unit per entry. The device section is
+split by an explicit marker line, never by a pattern that could cut a
+function body:
+
+```cpp
+#include <kernel_operator.h>
+constexpr uint32_t kTileElements = 2048;   // shared preamble
+
+// ==================== ASCEND_KERNEL_SECTION ====================
+__global__ __vector__ void partial_sum(...) { ... }
+
+// ==================== ASCEND_KERNEL_SECTION ====================
+__global__ __vector__ void finalize_sum(...) { ... }
+```
+
+Rules:
+
+* The text before the first marker is a shared preamble and is prepended to
+  every unit. `#include` lines, constants, helper structs, and `__aicore__`
+  helper functions belong there.
+* Every unit is `shared preamble + one segment` and must hold exactly one
+  `__global__ __vector__` entry. A segment with no entry, a unit with two
+  entries, or an entry before the first marker is refused with a build error
+  that names what was found.
+* Without any marker the whole device section is one unit, so single-kernel
+  samples are unchanged.
+* Entry names must be distinct; they are also the DeepJIT cache names, so
+  each kernel gets its own cache entry and its own bisheng and ld.lld calls.
+* The host section is unchanged and calls one `<kernel>_launch(...)` stub per
+  entry, in the order the two kernels must run.
+
+`akb_deepjit_prepare()` prepares every unit in order and returns the status
+of the first failure with a message that names the kernel, so `compiled` is
+only true when every kernel is ready. The launch stubs then start only the
+handles prepare filled; a timed launch never compiles. A change inside the
+shared preamble invalidates every unit, while a change inside one segment
+invalidates only that unit.
 
 ## ACL include order
 
@@ -115,8 +155,10 @@ CANN 9.1.0, torch 2.10.0 + torch_npu 2.10.0, DeepJIT commit
 * `ACL_DEV_ATTR_NPU_ARCH` is `2201`, so DeepJIT compiles with
   `bisheng -O2 --npu-arch=dav-2201 --cce-aicore-only` and links with
   `ld.lld -m aicorelinux -Ttext 0`.
-* A host build costs about 23 s cold and the device compile about 6 s cold
-  and 0.00 s on a warm cache.
+* A host build costs about 23 s cold and the device compile about 6 s per
+  kernel cold and 0.00 s on a warm cache. A two-kernel sample therefore
+  shows two bisheng and two ld.lld invocations on a cold cache and none on a
+  warm one.
 * The benchmark Add kernel, compiled through this path, returns exact results
   for 1, 2, 10, and 40 blocks, including a per-core remainder and a tail tile
   whose length is not 32-byte aligned.

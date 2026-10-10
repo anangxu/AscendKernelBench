@@ -303,8 +303,9 @@ class SampleEvaluator:
         step sets compiled, because a host library alone proves nothing about
         the kernel the benchmark measures.
         """
-        if self.backend is Backend.PYASC:
-            return self._load_pyasc()
+        # Checked before the pyasc branch so a direct worker payload cannot
+        # smuggle the DeepJIT build path into a backend that never builds a
+        # shared library. The host refuses this combination as well.
         if self.build_backend is BuildBackend.DEEPJIT and self.backend is not (
             Backend.ASCENDC
         ):
@@ -315,6 +316,8 @@ class SampleEvaluator:
                 ),
                 failure_stage="static_check",
             )
+        if self.backend is Backend.PYASC:
+            return self._load_pyasc()
         try:
             asc_source = (self.sample_path / "custom_op.asc").read_text(
                 encoding="utf-8"

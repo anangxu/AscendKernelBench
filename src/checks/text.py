@@ -19,6 +19,13 @@ HOST_SECTION_MARKER_RE = re.compile(
     r"^\s*//[\s=]*" + HOST_SECTION_MARKER + r"[\s=]*$", re.MULTILINE
 )
 
+# Optional split of the device section into one compiled unit per kernel entry
+# for the deepjit build backend; see docs/guide/deepjit.md.
+KERNEL_SECTION_MARKER = "ASCEND_KERNEL_SECTION"
+KERNEL_SECTION_MARKER_RE = re.compile(
+    r"^\s*//[\s=]*" + KERNEL_SECTION_MARKER + r"[\s=]*$"
+)
+
 
 def mask_string_constants(source: str) -> str:
     """Blank string constants so embedded text cannot trip regex rules.
