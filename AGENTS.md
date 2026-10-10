@@ -118,7 +118,7 @@ CLI facts worth remembering:
 | `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
 | `src/pyasc_runtime.py` | Worker-side pyasc runtime: sample-local JIT cache, real-file kernel import, platform and device selection, first-call timing. |
 | `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, per-kernel unit split, generated runtime/launcher, host extension build, and the framework prepare entry. |
-| `tests/` | No-device suites with plain asserts (`python tests/test_deepjit_bridge.py`); device behaviour is validated on an Ascend host, never here. |
+| `tests/` | No-device suites with plain asserts (`python tests/test_deepjit_bridge.py`, `test_deepjit_generation.py`, `test_run_record.py`); device behaviour is validated on an Ascend host, never here. |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
@@ -185,6 +185,12 @@ root (`src/` sits directly under that root).
     hold exactly one entry.
 12. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
+13. **A run is initialized once.** `create_run` records the planned task list
+    on first use; a later request for the same run is a continuation that
+    accumulates tasks, keeps every recorded value, and refuses a conflicting
+    harness field (backend, build backend, model, generation parameters,
+    hardware, endpoint, deepjit settings) instead of silently replacing the
+    record. Never re-stamp a run to make it match a new request.
 
 ## Conventions
 
