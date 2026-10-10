@@ -26,24 +26,83 @@ from .backend import (
 from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
 
 
+# Generation settings that identify one run's harness. A continuation may add
+# tasks, but it may not change any of these, and it never rewrites a recorded
+# value: the first request recorded for a key stays authoritative.
+_RUN_IDENTITY_KEYS = (
+    "backend",
+    "build_backend",
+    "hardware",
+    "model",
+    "prompt_mode",
+    "temperature",
+    "max_tokens",
+    "reasoning_effort",
+    "num_samples",
+    "deepjit",
+    "endpoint",
+    "timeout_seconds",
+    "max_retries",
+)
+
+
+def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
+    """Return the record to write, keeping a run's history intact.
+
+    A run is initialized once with its planned task list; a later request for
+    the same run is a continuation that may add tasks. Recorded values win, so
+    a continuation can never silently overwrite the model, the build backend,
+    the generation parameters, or the task list, and a conflicting identity
+    field is refused instead.
+
+    Raises:
+        ValueError: If a requested identity field conflicts with the record.
+    """
+    recorded = _read_generation_config(run_dir)
+    if not recorded:
+        return generation_config
+    for key in _RUN_IDENTITY_KEYS:
+        old, new = recorded.get(key), generation_config.get(key)
+        if old is not None and new is not None and old != new:
+            raise ValueError(
+                f"{run_dir} records {key}={old!r} but this request uses "
+                f"{new!r}; one run keeps one harness. Use a new run name."
+            )
+    merged = dict(generation_config)
+    merged.update(recorded)
+    tasks = list(recorded.get("tasks") or [])
+    for task in generation_config.get("tasks") or []:
+        if task not in tasks:
+            tasks.append(task)
+    if tasks:
+        merged["tasks"] = tasks
+    return merged
+
+
 def create_run(run_name: str, generation_config: dict) -> Path:
     """Create the run directory and stamp the generation config.
 
-    An existing directory is checked before anything is written, so a run whose
-    recorded backend or finished candidates conflict with this request is
-    refused rather than silently restamped.
+    A new directory records the request as given. An existing directory keeps
+    its recorded harness and task list: the request is merged into it, so a
+    per-task continuation accumulates tasks instead of replacing the record,
+    and any conflict is refused rather than silently restamped.
 
     Raises:
-        ValueError: If the directory records a different backend.
+        ValueError: If the directory records a different backend, or another
+            identity field conflicts with this request.
         FileExistsError: If it already holds candidates for the planned tasks.
     """
     run_dir = RUNS_DIR / run_name
+    record = generation_config
     if run_dir.is_dir() and generation_config:
+        record = _merge_generation_config(run_dir, generation_config)
+        # The candidate protection guards the tasks this request asks for, so a
+        # continuation can still add a task the run has not planned yet.
         _check_run_compatible(run_dir, generation_config)
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = run_dir / "generation_config.yaml"
-    if generation_config:
-        write_yaml_atomic(cfg_path, generation_config)
+    if record:
+        write_yaml_atomic(cfg_path, record)
     return run_dir
 
 

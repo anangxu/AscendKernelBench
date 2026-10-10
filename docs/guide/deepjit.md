@@ -154,10 +154,17 @@ Rules:
 
 `akb_deepjit_prepare()` prepares every unit in order and returns the status
 of the first failure with a message that names the kernel, so `compiled` is
-only true when every kernel is ready. The launch stubs then start only the
-handles prepare filled; a timed launch never compiles. A change inside the
-shared preamble invalidates every unit, while a change inside one segment
-invalidates only that unit.
+only true when every kernel is ready. A launch stub reads only the handle
+prepare filled and raises an explicit error when it is still empty, so a
+launch can never compile and a missing prepare fails loudly instead of being
+hidden. A change inside the shared preamble invalidates every unit, while a
+change inside one segment invalidates only that unit.
+
+Marker lines count only in code position: a marker line inside a block
+comment is refused with the line number instead of silently splitting a unit.
+The scan is textual and does not preprocess, so a marker inside an `#if 0`
+region still separates units; the resulting unit then fails the one-entry
+check or the device compile, which is a loud failure either way.
 
 ## ACL include order
 
@@ -167,6 +174,27 @@ suppressed by the identical include guard, and the symbols DeepJIT loads are
 missing. The generated runtime header and host TU therefore include
 `<acl/acl.h>` before any DeepJIT or torch_npu header, and CANN's include
 directories come before torch_npu's. Do not reorder them.
+
+## Cache invalidation
+
+Three caches exist and they invalidate on different things:
+
+| Cache | Key | Invalidated by |
+| --- | --- | --- |
+| Device artifact cache (`<sample>/deepjit/cache`) | kernel name plus a hash of the unit source, its tracked includes, the compile options, and the dependency signature | an edit to that unit or to a tracked include it pulls in |
+| `extra_signature` in that key | DeepJIT commit, checkout state, bisheng version, SoC | a DeepJIT update, a dirty checkout, a compiler change, another SoC |
+| Host extension build (`<sample>/deepjit/build`) | ninja depfiles over the generated launcher and host sources | a regenerated launcher, declarations, or host source |
+
+Generated files are written only when their content changes, so re-evaluating
+an unchanged sample leaves both caches warm: the host build becomes a no-op
+and the device cache serves every kernel without invoking bisheng or ld.lld.
+A dirty DeepJIT checkout is recorded as `deepjit_worktree` in the result
+metadata and gets its own signature, so modified headers cannot silently
+reuse artifacts built from the pinned commit.
+
+Compiler flags, environment values, and paths that reach the compiler are
+refused when they contain whitespace or shell metacharacters, because this
+DeepJIT version passes them through a shell command.
 
 ## Verified facts
 

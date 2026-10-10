@@ -131,6 +131,38 @@ def _write_if_changed(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+_UNSAFE_ARGUMENT_RE = re.compile(r"""[\s;|&$`<>()"'\\]""")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _require_safe_argument(value: str, what: str) -> str:
+    """Return a compiler flag or environment value that a shell can carry.
+
+    DeepJIT passes flags through a shell command and exports none of them
+    itself, so whitespace and shell metacharacters are refused instead of
+    being escaped silently.
+    """
+    text = str(value)
+    if _UNSAFE_ARGUMENT_RE.search(text):
+        raise DeepJitBuildError(
+            f"{what} must not contain whitespace or shell metacharacters: {text!r}"
+        )
+    return text
+
+
+def _require_safe_environment(env: dict[str, str]) -> dict[str, str]:
+    """Validate the process environment a build is allowed to apply."""
+    checked: dict[str, str] = {}
+    for key, value in env.items():
+        name = str(key)
+        if not _ENV_NAME_RE.match(name):
+            raise DeepJitBuildError(
+                f"deepjit env name must be a plain identifier: {name!r}"
+            )
+        checked[name] = _require_safe_argument(str(value), f"deepjit env {name}")
+    return checked
+
+
 def _require_safe_path(value: str, what: str) -> str:
     """Return an absolute, shell-safe path string or raise."""
     text = str(value).strip()
@@ -153,6 +185,41 @@ class DeviceUnit:
     signature: object
 
 
+def _marker_lines(lines: list[str]) -> list[int]:
+    """Return the indices of kernel-section marker lines in code position.
+
+    The scan is textual and line based: it does not preprocess the source, so
+    a marker inside an ``#if 0`` region still separates units. It does track
+    block comments, because a marker line inside one is almost always
+    documentation and splitting there would truncate a unit silently.
+
+    Raises:
+        DeepJitBuildError: If a marker line sits inside a block comment.
+    """
+    from .checks.text import KERNEL_SECTION_MARKER_RE
+
+    markers: list[int] = []
+    in_block_comment = False
+    for index, line in enumerate(lines):
+        body = line.rstrip("\n")
+        is_marker = KERNEL_SECTION_MARKER_RE.match(body) is not None
+        if in_block_comment:
+            if is_marker:
+                raise DeepJitBuildError(
+                    f"kernel-section marker inside a block comment at line "
+                    f"{index + 1}; a marker only separates units on a code line"
+                )
+            if "*/" in body:
+                in_block_comment = False
+            continue
+        if is_marker:
+            markers.append(index)
+        code = body.split("//", 1)[0]
+        if "/*" in code and "*/" not in code.partition("/*")[2]:
+            in_block_comment = True
+    return markers
+
+
 def split_device_units(device_source: str) -> list[DeviceUnit]:
     """Split the device section into one compilation unit per kernel entry.
 
@@ -171,11 +238,7 @@ def split_device_units(device_source: str) -> list[DeviceUnit]:
     from .checks.text import KERNEL_SECTION_MARKER_RE
 
     lines = device_source.splitlines(keepends=True)
-    markers = [
-        index
-        for index, line in enumerate(lines)
-        if KERNEL_SECTION_MARKER_RE.match(line.rstrip("\n"))
-    ]
+    markers = _marker_lines(lines)
     if not markers:
         shared, segments = "", [device_source]
     else:
@@ -329,6 +392,7 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
         f'#include "{DEEPJIT_RUNTIME_HEADER_NAME}"',
         "",
         "#include <exception>",
+        "#include <stdexcept>",
         "#include <string>",
         "",
         "namespace {",
@@ -340,18 +404,11 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             f'constexpr const char* kKernelSource{index} = "{include}";',
             "",
         ]
-    parts.append("// Compiled once per process, in prepare. A launch only reads these")
-    parts.append("// handles, so a timed launch can never reach the compiler or the")
-    parts.append("// include parser, even on a cache miss.")
+    parts.append("// Filled by prepare, read by the launch stubs. A launch never")
+    parts.append("// compiles and never touches the include parser.")
     for index in range(len(units)):
         parts += [
-            "const std::shared_ptr<deep_jit::ascend::Kernel>& "
-            f"kernel_handle{index}() {{",
-            "    static const auto compiled = akb_deepjit::runtime().compile(",
-            f"        kKernelName{index}, kKernelSource{index});",
-            "    return compiled;",
-            "}",
-            "",
+            f"std::shared_ptr<deep_jit::ascend::Kernel> kHandle{index};",
         ]
     parts.append("}  // namespace")
     parts.append("")
@@ -361,7 +418,8 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             "// message that names the kernel it came from.",
             f"int prepare_kernel{index}(char* error_message, int error_size) {{",
             "    try {",
-            f"        (void) kernel_handle{index}();",
+            f"        kHandle{index} = akb_deepjit::runtime().compile(",
+            f"            kKernelName{index}, kKernelSource{index});",
             "        return 0;",
             "    } catch (const std::exception& error) {",
             "        const std::string detail =",
@@ -406,8 +464,13 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
         parts += [
             f'extern "C" void {unit.signature.name}_launch({launch_params})',
             "{",
+            "    if (kHandle" + str(index) + " == nullptr) {",
+            "        throw std::runtime_error(",
+            f'            std::string("kernel ") + kKernelName{index} +',
+            '            " was not prepared; every kernel is prepared before it runs");',
+            "    }",
             "    akb_deepjit::runtime().launch(",
-            f"        kernel_handle{index}(),",
+            f"        kHandle{index},",
             "        deep_jit::ascend::LaunchOptions{",
             "            .stream = static_cast<aclrtStream>(stream),",
             "            .num_blocks = static_cast<int>(numBlocks)},",
@@ -446,6 +509,36 @@ def _host_source(host_source: str) -> str:
     return prologue + host_source
 
 
+def deepjit_worktree_state(root: Path) -> str:
+    """Return clean, dirty, or unknown for a DeepJIT checkout.
+
+    A dirty checkout still reports its HEAD commit, so the state is recorded
+    and folded into the dependency signature: artifacts built from modified
+    headers must not be reused as if the commit described them.
+    """
+    if not (Path(root) / ".git").exists():
+        return "unknown"
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    if result.returncode != 0:
+        return "unknown"
+    return "dirty" if result.stdout.strip() else "clean"
+
+
 def _bisheng_version() -> str:
     """Return the CANN bisheng version string, or an empty string."""
     from .build import cann_env
@@ -467,13 +560,15 @@ def _bisheng_version() -> str:
     return result.stdout.splitlines()[0].strip() if result.stdout else ""
 
 
-def _signature(commit: str, soc_version: str) -> str:
+def _signature(commit: str, soc_version: str, worktree: str = "clean") -> str:
     """Return the dependency signature recorded for one DeepJIT build.
 
     The include parser tracks the kernel source and its includes; the commit,
-    the compiler, and the SoC are not tracked, so they are folded in here.
+    the checkout state, the compiler, and the SoC are not tracked, so they are
+    folded in here. A dirty checkout gets its own signature so it can never
+    reuse artifacts that a clean checkout of the same commit produced.
     """
-    payload = "|".join((commit, _bisheng_version(), soc_version))
+    payload = "|".join((commit, worktree, _bisheng_version(), soc_version))
     return f"deepjit-{commit[:12]}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
 
 
@@ -508,6 +603,13 @@ def _prepare_layout(
         raise DeepJitBuildError(
             f"DeepJIT checkout at {root} is {found_commit}, but the configured "
             f"commit is {settings.commit}"
+        )
+    worktree = deepjit_worktree_state(root)
+    if worktree == "dirty":
+        logger.warning(
+            "DeepJIT checkout {} has uncommitted changes; artifacts get "
+            "their own signature and the state is recorded",
+            root,
         )
     effective_commit = settings.commit or found_commit or DEEPJIT_VERIFIED_COMMIT
     if not settings.commit and found_commit and found_commit != DEEPJIT_VERIFIED_COMMIT:
@@ -549,7 +651,7 @@ def _prepare_layout(
                 cache_dir=cache_dir,
                 build_dir=generated / "build",
                 kernel_source=kernel_paths[0],
-                signature=_signature(effective_commit, soc_version),
+                signature=_signature(effective_commit, soc_version, worktree),
             ),
             [
                 _require_safe_path(item, "deepjit include dir")
@@ -566,7 +668,7 @@ def _prepare_layout(
     )
     _write_if_changed(generated / DEEPJIT_HOST_NAME, _host_source(host_src))
 
-    signature_text = _signature(effective_commit, soc_version)
+    signature_text = _signature(effective_commit, soc_version, worktree)
     facts = DeepJitPaths(
         root=root,
         library_root=generated,
@@ -579,7 +681,9 @@ def _prepare_layout(
     _write_if_changed(
         generated / DEEPJIT_FACTS_NAME,
         json.dumps(
-            build_facts(facts, [str(unit.signature.name) for unit in units]),
+            build_facts(
+                facts, [str(unit.signature.name) for unit in units], worktree
+            ),
             indent=2,
             sort_keys=True,
         )
@@ -589,10 +693,13 @@ def _prepare_layout(
 
 
 def build_facts(
-    paths: DeepJitPaths, kernel_names: list[str] | None = None
+    paths: DeepJitPaths,
+    kernel_names: list[str] | None = None,
+    worktree: str = "unknown",
 ) -> dict[str, object]:
     """Return the recorded facts of one DeepJIT build for result metadata."""
     return {
+        "deepjit_worktree": worktree,
         "build_backend": "deepjit",
         "deepjit_kernels": list(kernel_names or []),
         "deepjit_root": str(paths.root),
@@ -680,7 +787,10 @@ def _extension_link_flags(settings: DeepJitConfig) -> list[str]:
     for item in settings.library_dirs:
         safe = _require_safe_path(item, "deepjit library dir")
         flags += [f"-L{safe}", f"-Wl,-rpath,{safe}"]
-    flags += list(settings.extra_ldflags)
+    flags += [
+        _require_safe_argument(flag, "deepjit extra ldflag")
+        for flag in settings.extra_ldflags
+    ]
     return flags
 
 
@@ -709,8 +819,8 @@ def build_deepjit_op(
 
     if settings.cxx:
         os.environ["CXX"] = _require_safe_path(settings.cxx, "deepjit cxx")
-    for key, value in settings.env.items():
-        os.environ[str(key)] = str(value)
+    for key, value in _require_safe_environment(settings.env).items():
+        os.environ[key] = value
     # The DeepJIT runtime reads its cache directory when it is constructed.
     os.environ["DJ_JIT_CACHE_DIR"] = str(paths.cache_dir)
 
@@ -726,7 +836,10 @@ def build_deepjit_op(
         "-Wno-missing-field-initializers",
         "-include",
         str(generated / DEEPJIT_DECLS_NAME),
-        *list(settings.extra_cflags),
+        *[
+            _require_safe_argument(flag, "deepjit extra cflag")
+            for flag in settings.extra_cflags
+        ],
     ]
     try:
         built = load(

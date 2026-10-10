@@ -27,6 +27,9 @@ from src.deepjit_build import (  # noqa: E402
     DeepJitBuildError,
     _decls_source,
     _launcher_source,
+    _require_safe_argument,
+    _require_safe_environment,
+    _signature,
     build_facts,
     convert_device_source,
     split_device_units,
@@ -82,6 +85,77 @@ def test_include_conversion() -> None:
     check("angle-only source unchanged",
           convert_device_source("#include <kernel_operator.h>\n")
           == "#include <kernel_operator.h>\n")
+
+
+def test_marker_scan_ignores_code_only() -> None:
+    """A marker inside a block comment is refused, not silently split on."""
+    documented = (
+        "#include <kernel_operator.h>\n"
+        "/* the convention is:\n"
+        f"{KERNEL_SECTION}\n"
+        "*/\n"
+        f"{KERNEL_SECTION}\n"
+        "__global__ __vector__ void one(__gm__ uint8_t* x, uint32_t n) {}\n"
+    )
+    try:
+        split_device_units(documented)
+    except DeepJitBuildError as exc:
+        check("marker inside a block comment is refused",
+              "block comment" in str(exc), str(exc))
+    else:
+        check("marker inside a block comment is refused", False)
+    plain = (
+        "#include <kernel_operator.h>\n"
+        f"{KERNEL_SECTION}\n"
+        "__global__ __vector__ void one(__gm__ uint8_t* x, uint32_t n) {}\n"
+    )
+    check("a code marker still splits", len(split_device_units(plain)) == 1)
+
+
+def test_unsafe_arguments_are_refused() -> None:
+    """Flags and environment values cannot smuggle shell metacharacters."""
+    check("a plain flag passes",
+          _require_safe_argument("-DTILE=2048", "flag") == "-DTILE=2048")
+    for label, value in (
+        ("space", "-DNAME=a b"),
+        ("semicolon", "-DX;rm -rf /"),
+        ("dollar", "-DX=$HOME"),
+        ("backtick", "-DX=`id`"),
+    ):
+        try:
+            _require_safe_argument(value, "flag")
+        except DeepJitBuildError:
+            check(f"unsafe {label} refused", True)
+        else:
+            check(f"unsafe {label} refused", False, value)
+    try:
+        _require_safe_environment({"NOT A NAME": "1"})
+    except DeepJitBuildError:
+        check("an invalid env name is refused", True)
+    else:
+        check("an invalid env name is refused", False)
+    check("a safe environment passes",
+          _require_safe_environment({"CPLUS_INCLUDE_PATH": "/opt/x/include"})
+          == {"CPLUS_INCLUDE_PATH": "/opt/x/include"})
+
+
+def test_signature_tracks_checkout_state() -> None:
+    """A dirty checkout gets its own signature and the facts record it."""
+    clean = _signature("deadbeef", "Ascend910B4", "clean")
+    dirty = _signature("deadbeef", "Ascend910B4", "dirty")
+    check("signature differs when dirty", clean != dirty)
+    check("signature is stable when clean",
+          clean == _signature("deadbeef", "Ascend910B4", "clean"))
+    paths = SimpleNamespace(
+        root=Path("/tmp/deepjit"),
+        library_root=Path("/tmp/lib"),
+        commit="deadbeef",
+        cache_dir=Path("/tmp/cache"),
+        kernel_source=Path(__file__),
+        signature=clean,
+    )
+    facts = build_facts(paths, ["a"], "dirty")
+    check("facts record the checkout state", facts["deepjit_worktree"] == "dirty")
 
 
 def test_parameter_whitelist() -> None:
@@ -199,13 +273,20 @@ def test_launcher_text() -> None:
           in launcher)
     check("prepare stops at the first failure",
           "if (status0 != 0)" in launcher and "if (status1 != 0)" in launcher)
-    check("prepare names the failing kernel",
-          launcher.count('std::string("kernel ")') == 2 * len(units))
+    # Two in each prepare helper (exception and catch-all) plus one in each
+    # launch guard.
+    check("every message names its kernel",
+          launcher.count('std::string("kernel ")') == 3 * len(units),
+          str(launcher.count('std::string("kernel ")')))
     check("every launch passes the caller stream",
           launcher.count(".stream = static_cast<aclrtStream>(stream)") == 2)
-    check("launch uses the cached handle",
-          launcher.count("kernel_handle0(),") == 1
-          and launcher.count("kernel_handle1(),") == 1)
+    check("launch reads the prepared handle",
+          launcher.count("        kHandle0,") == 1
+          and launcher.count("        kHandle1,") == 1)
+    check("launch refuses a missing handle",
+          launcher.count("was not prepared") == 2)
+    check("a launch cannot compile",
+          ".compile(" not in launcher.split('extern "C" void')[1])
     check("no compile call in a launch stub",
           ".compile(kKernelName" not in launcher.split("extern \"C\" void")[-1])
     check("no device-wide synchronize", "aclrtSynchronizeDevice" not in launcher)
@@ -336,6 +417,9 @@ def main() -> int:
     print("deepjit bridge checks")
     for test in (
         test_include_conversion,
+        test_marker_scan_ignores_code_only,
+        test_unsafe_arguments_are_refused,
+        test_signature_tracks_checkout_state,
         test_parameter_whitelist,
         test_single_kernel_units,
         test_multi_kernel_units,
