@@ -190,7 +190,10 @@ root (`src/` sits directly under that root).
     accumulates tasks, keeps every recorded value, and refuses a conflicting
     harness field (backend, build backend, model, generation parameters,
     hardware, endpoint, deepjit settings) instead of silently replacing the
-    record. Never re-stamp a run to make it match a new request.
+    record. Generation resolves an omitted flag from that record, so the run
+    executes what it recorded rather than a YAML default; an explicitly
+    different flag is refused. Never re-stamp a run to make it match a new
+    request.
 
 ## Conventions
 

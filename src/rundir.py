@@ -233,6 +233,38 @@ _HARNESS_KEYS = (
 )
 
 
+# Generation settings a continuation may inherit from a run's own record.
+# Values are kept even when they are None: presence is what a continuation
+# compares, so an empty recorded value is never replaced by a YAML default.
+_CONTINUATION_KEYS = (
+    "model",
+    "prompt_mode",
+    "temperature",
+    "reasoning_effort",
+    "max_tokens",
+    "num_samples",
+    "backend",
+    "build_backend",
+)
+
+
+def recorded_generation_defaults(run_dir: Path) -> dict[str, Any]:
+    """Return the generation settings an existing run already recorded.
+
+    An empty mapping means the run has no record yet, so a caller keeps its
+    own defaults. The deepjit block travels whole because its fields are
+    machine configuration rather than flags.
+    """
+    loaded = _read_generation_config(run_dir)
+    values: dict[str, Any] = {
+        key: loaded[key] for key in _CONTINUATION_KEYS if key in loaded
+    }
+    deepjit = loaded.get("deepjit")
+    if isinstance(deepjit, dict):
+        values["deepjit"] = dict(deepjit)
+    return values
+
+
 def generation_build_backend(run_dir: Path) -> BuildBackend | None:
     """Return the build backend recorded for a run, or None when absent.
 

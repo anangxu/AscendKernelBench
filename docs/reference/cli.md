@@ -45,7 +45,7 @@ python scripts/generate.py \
 | `--build-backend NAME` | `build_backend` from configuration, otherwise `cmake` | How `custom_op.asc` is built: `cmake` or `deepjit`. Recorded in the run. |
 | `--deepjit-root PATH` | `deepjit.root` | DeepJIT checkout for `--build-backend deepjit`. |
 | `--deepjit-commit SHA` | `deepjit.commit` | Pinned DeepJIT commit; a mismatch with the checkout is refused. |
-| `--run-name NAME` | `gen_YYYYMMDD_HHMMSS` | Output run name, using local time when generated automatically. |
+| `--run-name NAME` | `gen_YYYYMMDD_HHMMSS` | Output run name, using local time when generated automatically. Reusing a name continues that run: an omitted flag takes the value the run recorded, and an explicitly different value is refused. |
 | `--config PATH` | `configs/eval_default.yaml` | Load generation and hardware settings from an evaluation YAML file. |
 
 Successful samples include `prompt.txt`, `custom_op.asc`, `model_new.py`, and, when nonempty, `response_raw.txt`.

@@ -29,6 +29,43 @@ from src.prompt import build_prompt, system_prompt
 console = Console()
 
 
+def inherited_overrides(
+    args: argparse.Namespace, recorded: dict[str, object]
+) -> dict[str, object]:
+    """Return settings overrides, filling omitted flags from a run record.
+
+    A continuation can omit a flag: the recorded value then drives the
+    generation call, so the run executes what it recorded instead of a YAML
+    default. An explicitly passed flag still wins, and opening the run then
+    checks it against the record.
+    """
+    deepjit = recorded.get("deepjit")
+    deepjit = deepjit if isinstance(deepjit, dict) else {}
+    numeric = {
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "num_samples": args.n_samples,
+    }
+    overrides: dict[str, object] = {
+        key: value if value is not None else recorded.get(key)
+        for key, value in numeric.items()
+    }
+    overrides.update(
+        {
+            "model": args.model or recorded.get("model"),
+            "prompt_mode": args.prompt_mode or recorded.get("prompt_mode"),
+            "reasoning_effort": (
+                args.reasoning_effort or recorded.get("reasoning_effort")
+            ),
+            "backend": args.backend or recorded.get("backend"),
+            "build_backend": args.build_backend or recorded.get("build_backend"),
+            "deepjit_root": args.deepjit_root or deepjit.get("root"),
+            "deepjit_commit": args.deepjit_commit or deepjit.get("commit"),
+        }
+    )
+    return overrides
+
+
 def main() -> None:
     """Generate one or more samples per selected task."""
     setup_logging()
@@ -92,19 +129,11 @@ def main() -> None:
         hardware=args.hardware,
     )
     config, hardware = runtime.config, runtime.hardware
+    run_name = args.run_name or f"gen_{datetime.now():%Y%m%d_%H%M%S}"
+    recorded = rundir.recorded_generation_defaults(rundir.RUNS_DIR / run_name)
     try:
         settings = resolve_generation_settings(
-            config,
-            model=args.model,
-            prompt_mode=args.prompt_mode,
-            temperature=args.temperature,
-            num_samples=args.n_samples,
-            reasoning_effort=args.reasoning_effort,
-            max_tokens=args.max_tokens,
-            backend=args.backend,
-            build_backend=args.build_backend,
-            deepjit_root=args.deepjit_root,
-            deepjit_commit=args.deepjit_commit,
+            config, **inherited_overrides(args, recorded)
         )
     except ValueError as exc:
         die(str(exc))
@@ -117,15 +146,17 @@ def main() -> None:
     if not tasks:
         die("no tasks found")
 
-    run_name = args.run_name or f"gen_{datetime.now():%Y%m%d_%H%M%S}"
-    run_dir = rundir.create_run(
-        run_name,
-        generation_run_config(
-            settings,
-            hardware_name=hardware.name,
-            task_ids=[task.task_id for task in tasks],
-        ),
-    )
+    try:
+        run_dir = rundir.create_run(
+            run_name,
+            generation_run_config(
+                settings,
+                hardware_name=hardware.name,
+                task_ids=[task.task_id for task in tasks],
+            ),
+        )
+    except (ValueError, FileExistsError) as exc:
+        die(str(exc))
     logger.info(
         "run dir: {} ({} tasks x {} samples)",
         run_dir,
