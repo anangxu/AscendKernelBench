@@ -54,9 +54,7 @@ _CONVERTED_INCLUDE = "kernel_operator.h"
 
 # Device parameter types this path marshals; anything else is rejected rather
 # than passed through on a guess.
-DEEPJIT_POINTER_TYPES = frozenset(
-    {"uint8_t", "int8_t", "float", "int32_t", "uint32_t"}
-)
+DEEPJIT_POINTER_TYPES = frozenset({"uint8_t", "int8_t", "float", "int32_t", "uint32_t"})
 DEEPJIT_SCALAR_TYPES = frozenset({"int", "int32_t", "uint32_t", "int64_t", "float"})
 _POINTER_PARAM_RE = re.compile(r"^__gm__\s+(\w+)\s*\*\s*\w+$")
 _SCALAR_PARAM_RE = re.compile(r"^(?:const\s+)?(\w+)\s+\w+$")
@@ -370,7 +368,7 @@ inline deep_jit::Runtime<deep_jit::Ascend>& runtime() {{
     if (not initialized) {{
         jit = deep_jit::create_lazy_jit<deep_jit::Ascend>(deep_jit::Config(
             "{paths.library_root}", "{DEEPJIT_ENV_PREFIX}", "{paths.signature}",
-            {{"{paths.library_root}"{', ' + includes if includes else ''}}},
+            {{"{paths.library_root}"{", " + includes if includes else ""}}},
             {{"{DEEPJIT_KERNEL_PREFIX}"}}));
         initialized = true;
     }}
@@ -433,15 +431,15 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             "        return 0;",
             "    } catch (const std::exception& error) {",
             "        const std::string detail =",
-            "            std::string(\"kernel \") + kKernelName" + str(index),
-            "            + \": \" + error.what();",
+            '            std::string("kernel ") + kKernelName' + str(index),
+            '            + ": " + error.what();',
             "        akb_deepjit::write_error(",
             "            error_message, error_size, detail.c_str());",
             "        return 1;",
             "    } catch (...) {",
             "        const std::string detail =",
-            "            std::string(\"kernel \") + kKernelName" + str(index),
-            "            + \": unknown C++ exception\";",
+            '            std::string("kernel ") + kKernelName' + str(index),
+            '            + ": unknown C++ exception";',
             "        akb_deepjit::write_error(",
             "            error_message, error_size, detail.c_str());",
             "        return 2;",
@@ -596,8 +594,7 @@ def _prepare_layout(
     sections = split_asc_source(device_source)
     if sections is None:
         raise DeepJitBuildError(
-            "deepjit build backend requires the host-section marker in "
-            "custom_op.asc"
+            "deepjit build backend requires the host-section marker in custom_op.asc"
         )
     device_src, host_src = sections
     units = split_device_units(device_src)
@@ -698,9 +695,7 @@ def _prepare_layout(
     _write_if_changed(
         generated / DEEPJIT_FACTS_NAME,
         json.dumps(
-            build_facts(
-                facts, [str(unit.signature.name) for unit in units], worktree
-            ),
+            build_facts(facts, [str(unit.signature.name) for unit in units], worktree),
             indent=2,
             sort_keys=True,
         )
@@ -874,9 +869,7 @@ def build_deepjit_op(
             verbose=False,
         )
     except Exception as exc:  # torch raises a variety of build errors
-        raise DeepJitBuildError(
-            f"deepjit host build failed: {exc}"
-        ) from None
+        raise DeepJitBuildError(f"deepjit host build failed: {exc}") from None
     library = Path(str(built))
     if not library.is_file():
         raise DeepJitBuildError(f"deepjit host build produced no library: {library}")

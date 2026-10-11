@@ -43,7 +43,9 @@ PINNED = "3732a3b9a0a2e5126396908a362ba5abdf043b2f"
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     """Record one check result."""
-    print(f"  {'ok  ' if condition else 'FAIL'} - {name}{'' if condition else ' :: ' + detail}")
+    print(
+        f"  {'ok  ' if condition else 'FAIL'} - {name}{'' if condition else ' :: ' + detail}"
+    )
     if not condition:
         raise AssertionError(f"{name}: {detail}")
 
@@ -106,7 +108,9 @@ def test_linked_worktree(tmp: Path) -> None:
     worktree = tmp / "linked"
     git(repo, "worktree", "add", "--quiet", "-b", "linked", str(worktree))
     check("worktree .git is a file", (worktree / ".git").is_file())
-    check("worktree resolves", deepjit_commit(worktree) == head, deepjit_commit(worktree))
+    check(
+        "worktree resolves", deepjit_commit(worktree) == head, deepjit_commit(worktree)
+    )
 
 
 def test_unreadable_version(tmp: Path) -> None:
@@ -119,8 +123,11 @@ def test_unreadable_version(tmp: Path) -> None:
             tmp / "work_nonrepo", SOURCE, DeepJitConfig(root=str(plain)), "Ascend910B4"
         )
     except DeepJitVersionError as exc:
-        check("the layout refuses an unreadable version",
-              "cannot read the DeepJIT version" in str(exc), str(exc))
+        check(
+            "the layout refuses an unreadable version",
+            "cannot read the DeepJIT version" in str(exc),
+            str(exc),
+        )
     else:
         check("the layout refuses an unreadable version", False, "accepted")
 
@@ -129,11 +136,17 @@ def test_pin_match(tmp: Path) -> None:
     """A matching pin is verified against the real checkout and recorded."""
     repo, head = make_checkout(tmp, "pinned")
     paths = _prepare_layout(
-        tmp / "work_match", SOURCE, DeepJitConfig(root=str(repo), commit=head), "Ascend910B4"
+        tmp / "work_match",
+        SOURCE,
+        DeepJitConfig(root=str(repo), commit=head),
+        "Ascend910B4",
     )
     check("the actual commit is recorded", paths.commit == head, paths.commit)
-    check("the signature carries the actual commit",
-          paths.signature.startswith(f"deepjit-{head[:12]}-"), paths.signature)
+    check(
+        "the signature carries the actual commit",
+        paths.signature.startswith(f"deepjit-{head[:12]}-"),
+        paths.signature,
+    )
 
 
 def test_pin_mismatch(tmp: Path) -> None:

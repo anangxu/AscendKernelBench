@@ -51,7 +51,9 @@ PIN = "3732a3b9a0a2e5126396908a362ba5abdf043b2f"
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     """Record one check result."""
-    print(f"  {'ok  ' if condition else 'FAIL'} - {name}{'' if condition else ' :: ' + detail}")
+    print(
+        f"  {'ok  ' if condition else 'FAIL'} - {name}{'' if condition else ' :: ' + detail}"
+    )
     if not condition:
         raise AssertionError(f"{name}: {detail}")
 
@@ -163,7 +165,11 @@ def stamp_old_run(runs_dir: Path) -> Path:
 
 def test_omitted_flags_execute_recorded_values() -> None:
     """An omitted flag reaches the model boundary as the recorded value."""
-    with generation_call(["--task", TASK, "--run-name", RUN]) as (runs_dir, prompts, calls):
+    with generation_call(["--task", TASK, "--run-name", RUN]) as (
+        runs_dir,
+        prompts,
+        calls,
+    ):
         stamp_old_run(runs_dir)
         before = rundir._read_generation_config(runs_dir / RUN)
         exit_code = _run_main()
@@ -260,7 +266,11 @@ def test_a_new_run_keeps_the_configured_defaults() -> None:
         recorded = rundir._read_generation_config(runs_dir / "fresh_run")
     check("the fresh run succeeded", exit_code == 0, str(exit_code))
 
-    check("the default model is used", calls[0].get("model") == "deepseek-flash", str(calls[0]))
+    check(
+        "the default model is used",
+        calls[0].get("model") == "deepseek-flash",
+        str(calls[0]),
+    )
     check(
         "the default reasoning effort is used",
         calls[0].get("reasoning_effort") == "high",
