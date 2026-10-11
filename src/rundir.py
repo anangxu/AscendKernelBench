@@ -8,6 +8,7 @@ sample file names depend on the backend recorded for the run.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,6 @@ from .backend import (
     parse_build_backend,
 )
 from .io_util import read_json_object, write_json_atomic, write_yaml_atomic
-
 
 # Generation settings that identify one run's harness. A continuation may add
 # tasks, but it may not change any of these, and it never rewrites a recorded
@@ -47,28 +47,57 @@ _RUN_IDENTITY_KEYS = (
 )
 
 
+def _recorded_samples(run_dir: Path, recorded: dict) -> list[Path]:
+    """Return the sample directories an existing record already holds."""
+    backend = parse_backend(_backend_name(recorded.get("backend") or DEFAULT_BACKEND))
+    task_ids = recorded.get("tasks") or []
+    samples = int(recorded.get("num_samples") or 0)
+    return [
+        sample_dir(run_dir, task_id, sample_id)
+        for task_id in task_ids
+        for sample_id in range(samples)
+        if sample_complete(sample_dir(run_dir, task_id, sample_id), backend)
+        or (sample_dir(run_dir, task_id, sample_id) / "eval_result.json").is_file()
+    ]
+
+
 def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
     """Return the record to write, keeping a run's history intact.
 
     A run is initialized once with its planned task list; a later request for
     the same run is a continuation that may add tasks. Recorded values win, so
     a continuation can never silently overwrite the model, the build backend,
-    the generation parameters, or the task list, and a conflicting identity
-    field is refused instead.
+    the generation parameters, or the task list. Identity fields are compared
+    by presence, so an explicit None is a value like any other.
 
     Raises:
-        ValueError: If a requested identity field conflicts with the record.
+        ValueError: If a requested identity field conflicts with the record, or
+            if the record predates a field the request executes while samples
+            already exist.
     """
     recorded = _read_generation_config(run_dir)
     if not recorded:
         return generation_config
+    existing = _recorded_samples(run_dir, recorded)
+    filled: dict[str, Any] = {}
     for key in _RUN_IDENTITY_KEYS:
-        old, new = recorded.get(key), generation_config.get(key)
-        if old is not None and new is not None and old != new:
-            raise ValueError(
-                f"{run_dir} records {key}={old!r} but this request uses "
-                f"{new!r}; one run keeps one harness. Use a new run name."
-            )
+        if key in recorded and key in generation_config:
+            if recorded[key] != generation_config[key]:
+                raise ValueError(
+                    f"{run_dir} records {key}={recorded[key]!r} but this "
+                    f"request uses {generation_config[key]!r}; one run keeps "
+                    "one harness. Use a new run name."
+                )
+        elif key in generation_config:
+            # The record predates this field. Adopting the request is only
+            # safe while nothing was generated under the old record.
+            if existing:
+                raise ValueError(
+                    f"{run_dir} predates the {key} field and already holds "
+                    f"{len(existing)} sample(s), so this run cannot confirm "
+                    f"{key}={generation_config[key]!r}; use a new run name."
+                )
+            filled[key] = generation_config[key]
     merged = dict(generation_config)
     merged.update(recorded)
     tasks = list(recorded.get("tasks") or [])
@@ -77,6 +106,12 @@ def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
             tasks.append(task)
     if tasks:
         merged["tasks"] = tasks
+    if filled:
+        merged["record_filled"] = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "fields": filled,
+            "reason": "the record predates these fields and held no samples",
+        }
     return merged
 
 
@@ -119,15 +154,7 @@ def _check_run_compatible(run_dir: Path, generation_config: dict) -> None:
             f"request uses {requested.value}; one run is one backend. Use a "
             "new run name."
         )
-    task_ids = generation_config.get("tasks") or []
-    samples = int(generation_config.get("num_samples") or 0)
-    existing = [
-        sample_dir(run_dir, task_id, sample_id)
-        for task_id in task_ids
-        for sample_id in range(samples)
-        if sample_complete(sample_dir(run_dir, task_id, sample_id), requested)
-        or (sample_dir(run_dir, task_id, sample_id) / "eval_result.json").is_file()
-    ]
+    existing = _recorded_samples(run_dir, generation_config)
     if existing:
         shown = ", ".join(str(path.relative_to(run_dir)) for path in existing[:3])
         more = "" if len(existing) <= 3 else f" and {len(existing) - 3} more"

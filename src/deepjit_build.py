@@ -28,6 +28,7 @@ from .config import DeepJitConfig
 # The DeepJIT commit this path was verified against (Ascend 910B4, CANN
 # 9.1.0, torch 2.10.0). A checkout at another commit is reported, not trusted.
 DEEPJIT_VERIFIED_COMMIT = "3732a3b9a0a2e5126396908a362ba5abdf043b2f"
+_COMMIT_RE = re.compile(r"[0-9a-f]{40,64}")
 
 # Generated layout inside the sample directory.
 DEEPJIT_DIR_NAME = "deepjit"
@@ -63,6 +64,10 @@ _SCALAR_PARAM_RE = re.compile(r"^(?:const\s+)?(\w+)\s+\w+$")
 
 class DeepJitBuildError(RuntimeError):
     """Raised when the DeepJIT path rejects a source or fails to build."""
+
+
+class DeepJitVersionError(DeepJitBuildError):
+    """Raised when a checkout's version is unreadable or does not match."""
 
 
 @dataclass(frozen=True)
@@ -105,19 +110,25 @@ def resolve_deepjit_settings(settings: DeepJitConfig) -> DeepJitConfig:
 
 
 def deepjit_commit(root: Path) -> str:
-    """Return the HEAD commit of a DeepJIT checkout, or an empty string."""
-    head = Path(root) / ".git" / "HEAD"
+    """Return the HEAD commit of a DeepJIT checkout, or an empty string.
+
+    Git resolves the revision, so a packed-refs clone, a detached HEAD, and a
+    worktree (where .git is a file) all resolve the same way. An empty string
+    means the version could not be read, never that it matched.
+    """
     try:
-        text = head.read_text(encoding="utf-8").strip()
-    except OSError:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return ""
-    if text.startswith("ref:"):
-        reference = Path(root) / ".git" / text.split(" ", 1)[1].strip()
-        try:
-            return reference.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-    return text
+    if result.returncode != 0:
+        return ""
+    value = result.stdout.strip()
+    return value if _COMMIT_RE.fullmatch(value) else ""
 
 
 def _write_if_changed(path: Path, content: str) -> None:
@@ -235,7 +246,6 @@ def split_device_units(device_source: str) -> list[DeviceUnit]:
             or if two entries share a name.
     """
     from .build import BuildError, extract_kernel_signatures
-    from .checks.text import KERNEL_SECTION_MARKER_RE
 
     lines = device_source.splitlines(keepends=True)
     markers = _marker_lines(lines)
@@ -467,7 +477,8 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             "    if (kHandle" + str(index) + " == nullptr) {",
             "        throw std::runtime_error(",
             f'            std::string("kernel ") + kKernelName{index} +',
-            '            " was not prepared; every kernel is prepared before it runs");',
+            '            " was not prepared; every kernel is prepared '
+            'before it runs");',
             "    }",
             "    akb_deepjit::runtime().launch(",
             f"        kHandle{index},",
@@ -579,7 +590,7 @@ def _prepare_layout(
     soc_version: str,
 ) -> DeepJitPaths:
     """Create the generated directory layout and return its paths."""
-    from .build import extract_kernel_signatures, split_asc_source
+    from .build import split_asc_source
 
     work_dir = Path(work_dir).resolve()
     sections = split_asc_source(device_source)
@@ -599,10 +610,16 @@ def _prepare_layout(
             f"deepjit root does not look like a DeepJIT checkout: {root}"
         )
     found_commit = deepjit_commit(root)
-    if settings.commit and found_commit and settings.commit != found_commit:
-        raise DeepJitBuildError(
-            f"DeepJIT checkout at {root} is {found_commit}, but the configured "
-            f"commit is {settings.commit}"
+    if not found_commit:
+        raise DeepJitVersionError(
+            f"cannot read the DeepJIT version at {root}: the checkout has no "
+            "readable Git metadata, so neither a pinned commit nor a cache "
+            "signature can be trusted"
+        )
+    if settings.commit and settings.commit != found_commit:
+        raise DeepJitVersionError(
+            f"DeepJIT version mismatch: the checkout at {root} is "
+            f"{found_commit}, but the configured commit is {settings.commit}"
         )
     worktree = deepjit_worktree_state(root)
     if worktree == "dirty":
@@ -611,8 +628,8 @@ def _prepare_layout(
             "their own signature and the state is recorded",
             root,
         )
-    effective_commit = settings.commit or found_commit or DEEPJIT_VERIFIED_COMMIT
-    if not settings.commit and found_commit and found_commit != DEEPJIT_VERIFIED_COMMIT:
+    effective_commit = found_commit
+    if not settings.commit and found_commit != DEEPJIT_VERIFIED_COMMIT:
         logger.warning(
             "DeepJIT checkout {} is {}; this path was verified against {}",
             root,

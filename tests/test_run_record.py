@@ -19,6 +19,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import rundir  # noqa: E402
+from src.backend import Backend  # noqa: E402
+from src.cli_util import generation_run_config, resolve_generation_settings  # noqa: E402
+from src.config import load_eval_config  # noqa: E402
 
 PLANNED = ["level1/a_task", "level1/b_task", "level1/c_task"]
 
@@ -118,8 +121,14 @@ def test_conflicting_harness_is_refused() -> None:
             rundir.create_run("conflict", config(tasks=["level1/a_task"], endpoint="https://a/v1"))
             try:
                 rundir.create_run("conflict", config(tasks=["level1/b_task"], **overrides))
-            except ValueError:
+            except ValueError as exc:
                 check(f"conflicting {label} refused", True)
+                if label == "backend":
+                    check(
+                        "the backend conflict keeps its established message",
+                        "one run is one backend" in str(exc),
+                        str(exc),
+                    )
             else:
                 check(f"conflicting {label} refused", False, str(overrides))
             recorded = rundir._read_generation_config(rundir.RUNS_DIR / "conflict")
@@ -148,6 +157,164 @@ def test_completed_candidate_is_protected_across_tasks() -> None:
               str(recorded["tasks"]))
 
 
+def test_explicit_none_transitions() -> None:
+    """An explicit None is compared like any other identity value."""
+    for label, recorded_value, requested_value, expected in (
+        ("None to high", None, "high", "refused"),
+        ("high to None", "high", None, "refused"),
+        ("None to None", None, None, "accepted"),
+        ("high to high", "high", "high", "accepted"),
+        ("high to medium", "high", "medium", "refused"),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            rundir.RUNS_DIR = Path(tmp)
+            run_dir = rundir.create_run(
+                "effort", config(tasks=["level1/a_task"], reasoning_effort=recorded_value)
+            )
+            before = (run_dir / "generation_config.yaml").read_bytes()
+            try:
+                rundir.create_run(
+                    "effort",
+                    config(tasks=["level1/b_task"], reasoning_effort=requested_value),
+                )
+            except ValueError:
+                outcome = "refused"
+            else:
+                outcome = "accepted"
+            check(f"{label} is {expected}", outcome == expected, outcome)
+            recorded = rundir._read_generation_config(run_dir)
+            check(
+                f"{label} keeps the recorded value",
+                recorded["reasoning_effort"] == recorded_value,
+                str(recorded["reasoning_effort"]),
+            )
+            if outcome == "refused":
+                check(
+                    f"{label} leaves the record file untouched",
+                    (run_dir / "generation_config.yaml").read_bytes() == before,
+                )
+            expected_tasks = (
+                ["level1/a_task"] if outcome == "refused"
+                else ["level1/a_task", "level1/b_task"]
+            )
+            check(
+                f"{label} leaves the task list as {expected_tasks}",
+                recorded["tasks"] == expected_tasks,
+                str(recorded["tasks"]),
+            )
+
+
+def test_missing_identity_field_rule() -> None:
+    """A record that predates a field is only continued before samples exist."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        old = config(tasks=["level1/a_task"])
+        old.pop("reasoning_effort")
+        run_dir = rundir.create_run("old_record", old)
+        recorded_keys = rundir._read_generation_config(run_dir)
+        check(
+            "the record has no reasoning_effort",
+            "reasoning_effort" not in recorded_keys,
+        )
+        run_dir = rundir.create_run(
+            "old_record", config(tasks=["level1/b_task"], reasoning_effort="high")
+        )
+        recorded = rundir._read_generation_config(run_dir)
+        check(
+            "a sample-free record adopts the executed value",
+            recorded["reasoning_effort"] == "high",
+            str(recorded.get("reasoning_effort")),
+        )
+        check(
+            "the fill is documented",
+            recorded["record_filled"]["fields"] == {"reasoning_effort": "high"},
+            str(recorded.get("record_filled")),
+        )
+        check("the tasks still merge", recorded["tasks"] == ["level1/a_task", "level1/b_task"])
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        old = config(tasks=["level1/a_task"])
+        old.pop("reasoning_effort")
+        run_dir = rundir.create_run("with_samples", old)
+        sample = rundir.sample_dir(run_dir, "level1/a_task", 0)
+        sample.mkdir(parents=True)
+        (sample / "custom_op.asc").write_text("#include <kernel_operator.h>\n", encoding="utf-8")
+        (sample / "model_new.py").write_text("import torch\n", encoding="utf-8")
+        before = (run_dir / "generation_config.yaml").read_bytes()
+        try:
+            rundir.create_run(
+                "with_samples", config(tasks=["level1/b_task"], reasoning_effort="high")
+            )
+        except ValueError as exc:
+            check("a record with samples refuses the new field",
+                  "predates the reasoning_effort field" in str(exc), str(exc))
+        else:
+            check("a record with samples refuses the new field", False, "accepted")
+        check(
+            "the refusal left the record alone",
+            (run_dir / "generation_config.yaml").read_bytes() == before,
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        rundir.create_run("request_omits", config(tasks=["level1/a_task"], reasoning_effort="high"))
+        run_dir = rundir.create_run("request_omits", config(tasks=["level1/b_task"]))
+        recorded = rundir._read_generation_config(run_dir)
+        check("an omitted request field keeps the record",
+              recorded["reasoning_effort"] == "high", str(recorded.get("reasoning_effort")))
+
+
+def test_refusal_keeps_candidates() -> None:
+    """A refused continuation cannot touch the samples already on disk."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        run_dir = rundir.create_run("keep_candidate", config(tasks=["level1/a_task"]))
+        sample = rundir.sample_dir(run_dir, "level1/a_task", 0)
+        sample.mkdir(parents=True)
+        candidate = sample / "custom_op.asc"
+        candidate.write_text("#include <kernel_operator.h>\n// keeps this\n", encoding="utf-8")
+        record = run_dir / "generation_config.yaml"
+        before_record, before_candidate = record.read_bytes(), candidate.read_bytes()
+        try:
+            rundir.create_run("keep_candidate", config(tasks=["level1/a_task"], model="other"))
+        except ValueError:
+            pass
+        check("the record is untouched after a refusal", record.read_bytes() == before_record)
+        check("the candidate is untouched after a refusal", candidate.read_bytes() == before_candidate)
+
+
+def test_recorded_keys_are_all_identity_checked() -> None:
+    """Every harness key a run records is compared on continuation."""
+    settings = resolve_generation_settings(
+        load_eval_config(),
+        backend="ascendc",
+        build_backend="deepjit",
+        deepjit_root="/tmp/d",
+    )
+    record = generation_run_config(
+        settings, hardware_name="ascend910b2", task_ids=["level1/a_task"]
+    )
+    compared = set(rundir._RUN_IDENTITY_KEYS)
+    # The backend is compared by _check_run_compatible, which create_run always
+    # calls on an existing run and which keeps the established message.
+    covered = compared | {"backend"}
+    uncovered = {key for key in record if key not in covered and key != "tasks"}
+    check(
+        "recorded harness keys are all identity-checked",
+        not uncovered,
+        str(sorted(uncovered)),
+    )
+    generator_keys = {
+        "model", "temperature", "max_tokens", "prompt_mode", "num_samples",
+        "reasoning_effort", "backend", "build_backend", "deepjit",
+    }
+    check(
+        "every generator parameter is compared on continuation",
+        generator_keys <= covered,
+        str(sorted(generator_keys - covered)),
+    )
+    check("the recorded backend is present", record["backend"] == Backend.ASCENDC.value)
+
+
 def main() -> int:
     """Run every run-record check."""
     print("run record checks")
@@ -157,6 +324,10 @@ def main() -> int:
         test_continuation_keeps_non_identity_values,
         test_conflicting_harness_is_refused,
         test_completed_candidate_is_protected_across_tasks,
+        test_explicit_none_transitions,
+        test_missing_identity_field_rule,
+        test_refusal_keeps_candidates,
+        test_recorded_keys_are_all_identity_checked,
     ):
         test()
     print("\nall run record checks passed")
