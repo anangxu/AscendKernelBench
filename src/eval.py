@@ -14,8 +14,13 @@ from typing import Any
 from loguru import logger
 
 from . import rundir
-from .backend import DEFAULT_BACKEND, DEFAULT_BUILD_BACKEND, Backend, BuildBackend
-from .backend import sample_files
+from .backend import (
+    DEFAULT_BACKEND,
+    DEFAULT_BUILD_BACKEND,
+    Backend,
+    BuildBackend,
+    sample_files,
+)
 from .checker import check_sample_sources
 from .config import (
     DeepJitConfig,
@@ -24,8 +29,8 @@ from .config import (
     load_eval_config,
     load_hardware_profile,
 )
-from .deepjit_build import resolve_deepjit_settings
 from .dataset import Task, load_task
+from .deepjit_build import resolve_deepjit_settings
 from .eval_device import eval_sample_on_device
 from .eval_result import fail_result
 from .io_util import (

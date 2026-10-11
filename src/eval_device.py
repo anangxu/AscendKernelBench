@@ -28,12 +28,6 @@ from .build import (
     load_custom_op,
     split_asc_source,
 )
-from .config import DeepJitConfig
-from .deepjit_build import (
-    DeepJitBuildError,
-    prepare_deepjit_module,
-    read_build_facts,
-)
 from .compare import (
     HIDDEN_DISTRIBUTIONS,
     compare_candidate_outputs,
@@ -44,6 +38,12 @@ from .compare import (
     resolve_tolerances,
     snapshot_inputs,
     tensor_nbytes,
+)
+from .config import DeepJitConfig
+from .deepjit_build import (
+    DeepJitBuildError,
+    prepare_deepjit_module,
+    read_build_facts,
 )
 from .eval_result import (
     compiled_result,

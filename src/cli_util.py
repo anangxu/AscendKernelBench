@@ -20,7 +20,6 @@ from .backend import (
     parse_build_backend,
 )
 from .config import (
-    DeepJitConfig,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
