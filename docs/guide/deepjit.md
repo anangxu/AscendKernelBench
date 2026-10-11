@@ -34,6 +34,15 @@ committed. Empty `root`, `commit`, `cxx`, and `cache_dir` fall back to
 `DEEPJIT_ROOT`, `DEEPJIT_COMMIT`, `DEEPJIT_CXX`, and `DEEPJIT_CACHE_DIR`;
 `DEEPJIT_INCLUDE_DIRS` and `DEEPJIT_LIBRARY_DIRS` are colon-separated.
 
+The version of a checkout is read with `git rev-parse HEAD`, so a clone with
+packed references, a detached HEAD, and a linked worktree all report their
+real commit; the checkout therefore needs readable Git metadata and a `git`
+binary on the host. Without them the build is refused instead of guessing,
+and a configured `commit` is compared against that real commit: a mismatch
+and an unreadable checkout are refused with distinct messages. The commit
+recorded in the result metadata and folded into the cache signature is always
+the one the checkout reports, never the verified constant.
+
 Generation records the choice and the DeepJIT settings in the run:
 
 ```bash
