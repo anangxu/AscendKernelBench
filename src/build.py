@@ -28,6 +28,7 @@ from .checks.text import (
     HOST_SECTION_MARKER_RE,
     strip_cpp_comments,
 )
+from .config import DEFAULT_BUILD_BACKEND, BuildBackend, DeepJitConfig
 
 SHARED_LIBRARY_NAME = "libcustom_op.so"
 DEFAULT_CANN_SET_ENV = "/usr/local/Ascend/cann-9.1.0/set_env.sh"
@@ -457,6 +458,9 @@ def build_custom_op(
     *,
     cmake_arch: str,
     timeout_s: int = 600,
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
+    deepjit: DeepJitConfig | None = None,
+    soc_version: str = "",
 ) -> Path:
     """Write custom_op.asc into work_dir and build libcustom_op.so.
 
@@ -470,9 +474,17 @@ def build_custom_op(
         Path to the process-local shared library.
 
     Raises:
-        BuildError: If the source cannot be split, CMake fails, or no .so
-            is produced.
+        BuildError: If the source cannot be split, CMake fails, the DeepJIT
+            path rejects the source, or no .so is produced.
     """
+    if build_backend is BuildBackend.DEEPJIT:
+        return _build_via_deepjit(
+            asc_source,
+            Path(work_dir),
+            settings=deepjit or DeepJitConfig(),
+            timeout_s=timeout_s,
+            soc_version=soc_version,
+        )
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     # Write only on content change, so cmake/make can skip the Ascend C
@@ -517,6 +529,32 @@ def _looks_like_pch_failure(error: BuildError) -> bool:
     """Return True when the compiler log points at the precompiled header."""
     text = str(error).lower()
     return "pch" in text or "precompiled" in text
+
+
+def _build_via_deepjit(
+    asc_source: str,
+    work_dir: Path,
+    *,
+    settings: DeepJitConfig,
+    timeout_s: int,
+    soc_version: str,
+) -> Path:
+    """Build the sample through the DeepJIT path, raising BuildError."""
+    from .deepjit_build import DeepJitBuildError, build_deepjit_op
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    _write_if_changed(work_dir / "custom_op.asc", asc_source)
+    try:
+        library, _ = build_deepjit_op(
+            asc_source,
+            work_dir,
+            settings=settings,
+            soc_version=soc_version,
+            timeout_s=timeout_s,
+        )
+    except DeepJitBuildError as exc:
+        raise BuildError(str(exc)) from None
+    return library
 
 
 def _build_via_cmake(

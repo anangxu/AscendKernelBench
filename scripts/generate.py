@@ -22,11 +22,48 @@ from src.cli_util import (
     resolve_generation_settings,
     select_tasks,
 )
+from src.config import BuildBackend
 from src.llm import LLMClient
 from src.log import die, setup_logging
-from src.prompt import SYSTEM_PROMPT, build_prompt
+from src.prompt import build_prompt, system_prompt
 
 console = Console()
+
+
+def inherited_overrides(
+    args: argparse.Namespace, recorded: dict[str, object]
+) -> dict[str, object]:
+    """Return settings overrides, filling omitted flags from a run record.
+
+    A continuation can omit a flag: the recorded value then drives the
+    generation call, so the run executes what it recorded instead of a YAML
+    default. An explicitly passed flag still wins, and opening the run then
+    checks it against the record.
+    """
+    deepjit = recorded.get("deepjit")
+    deepjit = deepjit if isinstance(deepjit, dict) else {}
+    numeric = {
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "num_samples": args.n_samples,
+    }
+    overrides: dict[str, object] = {
+        key: value if value is not None else recorded.get(key)
+        for key, value in numeric.items()
+    }
+    overrides.update(
+        {
+            "model": args.model or recorded.get("model"),
+            "prompt_mode": args.prompt_mode or recorded.get("prompt_mode"),
+            "reasoning_effort": (
+                args.reasoning_effort or recorded.get("reasoning_effort")
+            ),
+            "build_backend": args.build_backend or recorded.get("build_backend"),
+            "deepjit_root": args.deepjit_root or deepjit.get("root"),
+            "deepjit_commit": args.deepjit_commit or deepjit.get("commit"),
+        }
+    )
+    return overrides
 
 
 def main() -> None:
@@ -61,6 +98,22 @@ def main() -> None:
         choices=["low", "medium", "high"],
         help="thinking depth; omitted when unset",
     )
+    parser.add_argument(
+        "--build-backend",
+        default=None,
+        choices=[item.value for item in BuildBackend],
+        help="how custom_op.asc is built: cmake (default) or deepjit",
+    )
+    parser.add_argument(
+        "--deepjit-root",
+        default=None,
+        help="DeepJIT checkout used by --build-backend deepjit",
+    )
+    parser.add_argument(
+        "--deepjit-commit",
+        default=None,
+        help="pinned DeepJIT commit; a mismatch with the checkout is refused",
+    )
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
@@ -70,15 +123,11 @@ def main() -> None:
         hardware=args.hardware,
     )
     config, hardware = runtime.config, runtime.hardware
+    run_name = args.run_name or f"gen_{datetime.now():%Y%m%d_%H%M%S}"
+    recorded = rundir.recorded_generation_defaults(rundir.RUNS_DIR / run_name)
     try:
         settings = resolve_generation_settings(
-            config,
-            model=args.model,
-            prompt_mode=args.prompt_mode,
-            temperature=args.temperature,
-            num_samples=args.n_samples,
-            reasoning_effort=args.reasoning_effort,
-            max_tokens=args.max_tokens,
+            config, **inherited_overrides(args, recorded)
         )
     except ValueError as exc:
         die(str(exc))
@@ -97,16 +146,18 @@ def main() -> None:
     if candidate.is_file():
         hardware_file = str(candidate.resolve())
 
-    run_name = args.run_name or f"gen_{datetime.now():%Y%m%d_%H%M%S}"
-    run_dir = rundir.create_run(
-        run_name,
-        generation_run_config(
-            settings,
-            hardware_name=hardware.name,
-            task_ids=[task.task_id for task in tasks],
-            hardware_file=hardware_file,
-        ),
-    )
+    try:
+        run_dir = rundir.create_run(
+            run_name,
+            generation_run_config(
+                settings,
+                hardware_name=hardware.name,
+                task_ids=[task.task_id for task in tasks],
+                hardware_file=hardware_file,
+            ),
+        )
+    except (ValueError, FileExistsError) as exc:
+        die(str(exc))
     logger.info(
         "run dir: {} ({} tasks x {} samples)",
         run_dir,
@@ -120,6 +171,7 @@ def main() -> None:
         max_tokens=settings.max_tokens,
         reasoning_effort=settings.reasoning_effort,
     )
+    system = system_prompt(settings.build_backend)
     total = len(tasks) * settings.num_samples
     failures = 0
     with cli_progress(console) as progress:
@@ -129,11 +181,12 @@ def main() -> None:
                 task,
                 hardware,
                 mode=settings.prompt_mode,
+                build_backend=settings.build_backend,
             )
             for sample_id in range(settings.num_samples):
                 progress.update(bar, description=f"{task.task_id} s{sample_id}")
                 try:
-                    result = client.generate(prompt, system=SYSTEM_PROMPT)
+                    result = client.generate(prompt, system=system)
                     rundir.save_sample(
                         run_dir,
                         task.task_id,

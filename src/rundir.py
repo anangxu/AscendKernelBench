@@ -7,6 +7,7 @@ deliverables and eval_result.json, and an aggregate eval_results.json.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import yaml
 
 from ._paths import RUNS_DIR
+from .config import BuildBackend, parse_build_backend
 from .io_util import (
     read_json_object,
     write_json_atomic,
@@ -22,14 +24,130 @@ from .io_util import (
 )
 from .llm import AscendCGeneration
 
+# Generation settings that identify one run's harness. A continuation may add
+# tasks, but it may not change any of these, and it never rewrites a recorded
+# value: the first request recorded for a key stays authoritative.
+_RUN_IDENTITY_KEYS = (
+    "build_backend",
+    "hardware",
+    "model",
+    "prompt_mode",
+    "temperature",
+    "max_tokens",
+    "reasoning_effort",
+    "num_samples",
+    "deepjit",
+)
+
+
+def _recorded_samples(run_dir: Path, recorded: dict) -> list[Path]:
+    """Return the sample directories an existing record already holds."""
+    task_ids = recorded.get("tasks") or []
+    samples = int(recorded.get("num_samples") or 0)
+    found: list[Path] = []
+    for task_id in task_ids:
+        for sample_id in range(samples):
+            path = sample_dir(run_dir, task_id, sample_id)
+            if (path / "custom_op.asc").is_file() and (path / "model_new.py").is_file():
+                found.append(path)
+            elif (path / "eval_result.json").is_file():
+                found.append(path)
+    return found
+
+
+def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
+    """Return the record to write, keeping a run's history intact.
+
+    A run is initialized once with its planned task list; a later request for
+    the same run is a continuation that may add tasks. Recorded values win, so
+    a continuation can never silently overwrite the model, the build backend,
+    the generation parameters, or the task list. Identity fields are compared
+    by presence, so an explicit None is a value like any other.
+
+    Raises:
+        ValueError: If a requested identity field conflicts with the record, or
+            if the record predates a field the request executes while samples
+            already exist.
+    """
+    recorded = _read_generation_config(run_dir)
+    if not recorded:
+        return generation_config
+    existing = _recorded_samples(run_dir, recorded)
+    filled: dict[str, Any] = {}
+    for key in _RUN_IDENTITY_KEYS:
+        if key in recorded and key in generation_config:
+            if recorded[key] != generation_config[key]:
+                raise ValueError(
+                    f"{run_dir} records {key}={recorded[key]!r} but this "
+                    f"request uses {generation_config[key]!r}; one run keeps "
+                    "one harness. Use a new run name."
+                )
+        elif key in generation_config:
+            # The record predates this field. Adopting the request is only
+            # safe while nothing was generated under the old record.
+            if existing:
+                raise ValueError(
+                    f"{run_dir} predates the {key} field and already holds "
+                    f"{len(existing)} sample(s), so this run cannot confirm "
+                    f"{key}={generation_config[key]!r}; use a new run name."
+                )
+            filled[key] = generation_config[key]
+    merged = dict(generation_config)
+    merged.update(recorded)
+    tasks = list(recorded.get("tasks") or [])
+    for task in generation_config.get("tasks") or []:
+        if task not in tasks:
+            tasks.append(task)
+    if tasks:
+        merged["tasks"] = tasks
+    if filled:
+        merged["record_filled"] = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "fields": filled,
+            "reason": "the record predates these fields and held no samples",
+        }
+    return merged
+
+
+def _check_run_compatible(run_dir: Path, generation_config: dict) -> None:
+    """Refuse to restamp a run that this generation request conflicts with.
+
+    Raises:
+        FileExistsError: If the requested tasks already hold samples.
+    """
+    existing = _recorded_samples(run_dir, generation_config)
+    if existing:
+        shown = ", ".join(str(path.relative_to(run_dir)) for path in existing[:3])
+        more = "" if len(existing) <= 3 else f" and {len(existing) - 3} more"
+        raise FileExistsError(
+            f"{run_dir} already holds {len(existing)} candidate(s): {shown}{more}. "
+            "Generation does not overwrite samples; use a new run name."
+        )
+
 
 def create_run(run_name: str, generation_config: dict) -> Path:
-    """Create the run directory and stamp the generation config."""
+    """Create the run directory and stamp the generation config.
+
+    A new directory records the request as given. An existing directory keeps
+    its recorded harness and task list: the request is merged into it, so a
+    per-task continuation accumulates tasks instead of replacing the record,
+    and any conflict is refused rather than silently restamped.
+
+    Raises:
+        ValueError: If another identity field conflicts with this request.
+        FileExistsError: If it already holds candidates for the planned tasks.
+    """
     run_dir = RUNS_DIR / run_name
+    record = generation_config
+    if run_dir.is_dir() and generation_config:
+        record = _merge_generation_config(run_dir, generation_config)
+        # The candidate protection guards the tasks this request asks for, so a
+        # continuation can still add a task the run has not planned yet.
+        _check_run_compatible(run_dir, generation_config)
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = run_dir / "generation_config.yaml"
-    if generation_config:
-        write_yaml_atomic(cfg_path, generation_config)
+    if record:
+        write_yaml_atomic(cfg_path, record)
     return run_dir
 
 
@@ -90,7 +208,55 @@ _HARNESS_KEYS = (
     "temperature",
     "reasoning_effort",
     "max_tokens",
+    "build_backend",
 )
+
+# Generation settings a continuation may inherit from a run's own record.
+# Values are kept even when they are None: presence is what a continuation
+# compares, so an empty recorded value is never replaced by a YAML default.
+_CONTINUATION_KEYS = (
+    "model",
+    "prompt_mode",
+    "temperature",
+    "reasoning_effort",
+    "max_tokens",
+    "num_samples",
+    "build_backend",
+)
+
+
+def recorded_generation_defaults(run_dir: Path) -> dict[str, Any]:
+    """Return the generation settings an existing run already recorded.
+
+    An empty mapping means the run has no record yet, so a caller keeps its
+    own defaults. The deepjit block travels whole because its fields are
+    machine configuration rather than flags.
+    """
+    loaded = _read_generation_config(run_dir)
+    values: dict[str, Any] = {
+        key: loaded[key] for key in _CONTINUATION_KEYS if key in loaded
+    }
+    deepjit = loaded.get("deepjit")
+    if isinstance(deepjit, dict):
+        values["deepjit"] = dict(deepjit)
+    return values
+
+
+def generation_build_backend(run_dir: Path) -> BuildBackend | None:
+    """Return the build backend recorded for a run, or None when absent."""
+    value = _read_generation_config(run_dir).get("build_backend")
+    if value is None:
+        return None
+    try:
+        return parse_build_backend(value)
+    except ValueError:
+        return None
+
+
+def generation_deepjit(run_dir: Path) -> dict[str, Any]:
+    """Return the DeepJIT settings recorded for a run, if any."""
+    value = _read_generation_config(run_dir).get("deepjit")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def generation_harness(run_dir: Path) -> dict[str, Any]:

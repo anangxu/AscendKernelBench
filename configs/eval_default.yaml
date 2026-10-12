@@ -1,6 +1,22 @@
 # Default evaluation configuration for AscendKernelBench.
 hardware: ascend910b2
 
+# How custom_op.asc becomes a loadable library: cmake (default) or deepjit.
+# The deepjit block is local machine configuration: empty fields fall back to
+# DEEPJIT_ROOT, DEEPJIT_COMMIT, DEEPJIT_CXX, and DEEPJIT_CACHE_DIR.
+build_backend: cmake
+deepjit:
+  root: ""
+  commit: ""
+  cxx: ""
+  include_dirs: []
+  library_dirs: []
+  env: {}
+  extra_cflags: []
+  extra_ldflags: []
+  cache_dir: ""
+  build_timeout: 1800
+
 ########################### CORRECTNESS ###########################
 # Five seeded trials, all must pass (docs/guide/evaluation.md).
 num_correct_trials: 5

@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .build import (
     BuildError,
@@ -30,6 +30,17 @@ from .compare import (
     resolve_tolerances,
     snapshot_inputs,
     tensor_nbytes,
+)
+from .config import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
+    DeepJitConfig,
+    parse_build_backend,
+)
+from .deepjit_build import (
+    DeepJitBuildError,
+    prepare_deepjit_module,
+    read_build_facts,
 )
 from .eval_result import compiled_result, eval_protocol_metadata, fail_result
 from .runtime import (
@@ -65,6 +76,9 @@ class DeviceEvalRequest(BaseModel):
     tolerances: dict[str, dict[str, float]]
     excessive_speedup: float
     build_timeout: int
+    soc_version: str = ""
+    build_backend: str = DEFAULT_BUILD_BACKEND.value
+    deepjit: dict[str, Any] = Field(default_factory=dict)
     memory_bandwidth_gbps: float = 0.0
     peak_tflops: float = 0.0
     l2_clear_size: int = 256 * 1024 * 1024
@@ -104,6 +118,8 @@ class SampleEvaluator:
         """Bind the request; runtime objects are filled during run."""
         self.req = request
         self.sample_path = Path(request.sample_dir)
+        self.build_backend = parse_build_backend(request.build_backend)
+        self.deepjit = DeepJitConfig.model_validate(request.deepjit)
         self.so_path: Path | None = None
         self.torch: Any = None
         self.torch_device: Any = None
@@ -187,9 +203,17 @@ class SampleEvaluator:
         )
 
     def _build_and_load(self) -> dict[str, Any] | None:
-        """Compile and load libcustom_op.so; fail-payload on error."""
+        """Compile and load the kernel; fail-payload on error.
+
+        The DeepJIT path runs in two steps: the host library is built and
+        loaded first, then the device kernel is compiled. Only the device step
+        sets compiled, because a host library alone proves nothing about the
+        kernel the benchmark measures.
+        """
         asc_source = (self.sample_path / "custom_op.asc").read_text(encoding="utf-8")
         started = time.monotonic()
+        deepjit_build = self.build_backend is BuildBackend.DEEPJIT
+        self.metadata["build_backend"] = self.build_backend.value
         try:
             self.metadata["build_mode"] = (
                 "split" if split_asc_source(asc_source) is not None else "legacy"
@@ -199,6 +223,9 @@ class SampleEvaluator:
                 self.sample_path,
                 cmake_arch=self.req.cmake_arch,
                 timeout_s=self.req.build_timeout,
+                build_backend=self.build_backend,
+                deepjit=self.deepjit,
+                soc_version=self.req.soc_version,
             )
             load_custom_op(self.so_path, asc_source)
         except (BuildError, OSError) as exc:
@@ -209,7 +236,41 @@ class SampleEvaluator:
                 runtime_error=f"shared library load failed: {exc}",
             )
         finally:
+            # A host library is not a compiled kernel on the DeepJIT path, so
+            # this figure stays a host build time until the device step runs.
             self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
+        if deepjit_build:
+            self.metadata.update(read_build_facts(self.sample_path))
+            return self._prepare_deepjit()
+        # The CMake template compiles the device kernel inside the host build,
+        # so a produced and loaded library is the compile step.
+        self.compiled = True
+        return None
+
+    def _prepare_deepjit(self) -> dict[str, Any] | None:
+        """Compile the device kernel through the framework prepare entry.
+
+        Nothing is launched here. DeepJIT queries the device for its compiler
+        defaults, so the NPU context has to be current first; a failure is a
+        compile failure of the candidate's device source, so the sample is
+        reported as not compiled together with the compiler output.
+        """
+        started = time.monotonic()
+        try:
+            self.torch.npu.set_device(npu_device_index(self.req.device))
+            prepare_deepjit_module(self.so_path)
+        except DeepJitBuildError as exc:
+            return fail_result(
+                compiled=False,
+                compilation_error=str(exc),
+                failure_stage="device_compile",
+                build_backend=self.build_backend.value,
+            )
+        finally:
+            self.metadata["device_compile_seconds"] = round(
+                time.monotonic() - started, 3
+            )
+        self.compiled = True
         return None
 
     def _load_python_modules(self) -> dict[str, Any] | None:
