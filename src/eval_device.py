@@ -265,6 +265,7 @@ class SampleEvaluator:
                 compilation_error=str(exc),
                 failure_stage="device_compile",
                 build_backend=self.build_backend.value,
+                device_compile_seconds=round(time.monotonic() - started, 3),
             )
         finally:
             self.metadata["device_compile_seconds"] = round(
