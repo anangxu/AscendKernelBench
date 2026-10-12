@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src import eval as eval_module  # noqa: E402
 from src import rundir  # noqa: E402
 from src.cli_util import (  # noqa: E402
     generation_run_config,
@@ -380,6 +381,186 @@ def test_recorded_keys_are_all_identity_checked() -> None:
     )
 
 
+def legacy_run(name: str, task: str) -> Path:
+    """Create a run record as the pipeline wrote it before build_backend."""
+    legacy = config(tasks=[task])
+    legacy.pop("build_backend")
+    legacy.pop("deepjit")
+    run_dir = rundir.create_run(name, legacy)
+    sample = rundir.sample_dir(run_dir, task, 0)
+    sample.mkdir(parents=True, exist_ok=True)
+    (sample / "custom_op.asc").write_text(
+        "#include <kernel_operator.h>\n", encoding="utf-8"
+    )
+    (sample / "model_new.py").write_text("import torch\n", encoding="utf-8")
+    return run_dir
+
+
+def test_legacy_record_continues_as_cmake() -> None:
+    """A record without build_backend is a CMake run and keeps growing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        run_dir = legacy_run("legacy", "level1/a_task")
+        candidate = rundir.sample_dir(run_dir, "level1/a_task", 0) / "custom_op.asc"
+        before_candidate = candidate.read_bytes()
+        check(
+            "a legacy record reads as cmake",
+            rundir.generation_build_backend(run_dir) is BuildBackend.CMAKE,
+        )
+        check(
+            "a legacy record inherits cmake",
+            rundir.recorded_generation_defaults(run_dir).get("build_backend")
+            == "cmake",
+        )
+        cmake_request = config(tasks=["level1/b_task"], build_backend="cmake")
+        cmake_request.pop("deepjit")
+        run_dir = rundir.create_run("legacy", cmake_request)
+        recorded = rundir._read_generation_config(run_dir)
+        check(
+            "the cmake continuation appends the task",
+            recorded["tasks"] == ["level1/a_task", "level1/b_task"],
+            str(recorded["tasks"]),
+        )
+        check(
+            "the legacy record is interpreted, not replaced",
+            recorded["build_backend"] == BuildBackend.CMAKE.value,
+            str(recorded.get("build_backend")),
+        )
+        check(
+            "the original candidate is untouched",
+            candidate.read_bytes() == before_candidate,
+        )
+
+
+def test_legacy_record_cannot_switch_to_deepjit() -> None:
+    """A legacy CMake run refuses a DeepJIT request and changes nothing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        run_dir = legacy_run("legacy_switch", "level1/a_task")
+        candidate = rundir.sample_dir(run_dir, "level1/a_task", 0) / "custom_op.asc"
+        record = run_dir / "generation_config.yaml"
+        before_record, before_candidate = record.read_bytes(), candidate.read_bytes()
+        try:
+            rundir.create_run(
+                "legacy_switch",
+                config(
+                    tasks=["level1/b_task"],
+                    build_backend="deepjit",
+                    deepjit={"root": "/tmp/x"},
+                ),
+            )
+        except ValueError as exc:
+            check("a DeepJIT switch is refused", "build_backend" in str(exc), str(exc))
+        else:
+            check("a DeepJIT switch is refused", False, "accepted")
+        check(
+            "the record is unchanged after the refusal",
+            record.read_bytes() == before_record,
+        )
+        check(
+            "the candidate is unchanged after the refusal",
+            candidate.read_bytes() == before_candidate,
+        )
+
+
+def test_legacy_record_ignores_a_deepjit_config_default() -> None:
+    """The current configuration default cannot move a legacy run off cmake."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        run_dir = legacy_run("legacy_default", "level1/a_task")
+        deepjit_config = load_eval_config().model_copy(
+            update={"build_backend": BuildBackend.DEEPJIT}
+        )
+        build_backend, _ = eval_module._resolve_build_settings(run_dir, deepjit_config)
+        check(
+            "evaluation still resolves the legacy run to cmake",
+            build_backend is BuildBackend.CMAKE,
+            str(build_backend),
+        )
+        inherited = rundir.recorded_generation_defaults(run_dir)
+        settings = resolve_generation_settings(
+            deepjit_config, build_backend=inherited.get("build_backend")
+        )
+        check(
+            "generation still resolves the legacy run to cmake",
+            settings.build_backend is BuildBackend.CMAKE,
+            str(settings.build_backend),
+        )
+
+
+def test_recorded_backend_and_other_fields_stay_strict() -> None:
+    """An explicit backend conflict and other identity conflicts still refuse."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        rundir.create_run(
+            "modern",
+            config(
+                tasks=["level1/a_task"], build_backend="deepjit", deepjit={"root": "/x"}
+            ),
+        )
+        try:
+            cmake_request = config(tasks=["level1/b_task"], build_backend="cmake")
+            cmake_request.pop("deepjit")
+            rundir.create_run("modern", cmake_request)
+        except ValueError:
+            check("a recorded backend conflict is refused", True)
+        else:
+            check("a recorded backend conflict is refused", False)
+        try:
+            rundir.create_run(
+                "modern",
+                config(
+                    tasks=["level1/c_task"],
+                    build_backend="deepjit",
+                    deepjit={"root": "/x"},
+                    model="other",
+                ),
+            )
+        except ValueError as exc:
+            check(
+                "another identity conflict is still refused",
+                "model" in str(exc),
+                str(exc),
+            )
+        else:
+            check("another identity conflict is still refused", False)
+        check(
+            "the modern record keeps its build backend and tasks",
+            rundir._read_generation_config(Path(tmp) / "modern")["build_backend"]
+            == "deepjit"
+            and rundir._read_generation_config(Path(tmp) / "modern")["tasks"]
+            == ["level1/a_task"],
+        )
+
+
+def test_removed_deepjit_fields_do_not_conflict() -> None:
+    """A DeepJIT record keeps working after a setting is removed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rundir.RUNS_DIR = Path(tmp)
+        with_timeout = config(
+            tasks=["level1/a_task"], build_backend="deepjit", deepjit={"root": "/x"}
+        )
+        with_timeout["deepjit"]["build_timeout"] = 1800
+        rundir.create_run("stale_field", with_timeout)
+        run_dir = rundir.create_run(
+            "stale_field",
+            config(
+                tasks=["level1/b_task"], build_backend="deepjit", deepjit={"root": "/x"}
+            ),
+        )
+        recorded = rundir._read_generation_config(run_dir)
+        check(
+            "the continuation is accepted",
+            recorded["tasks"] == ["level1/a_task", "level1/b_task"],
+            str(recorded["tasks"]),
+        )
+        check(
+            "the stale field is left in history",
+            recorded["deepjit"].get("build_timeout") == 1800,
+            str(recorded.get("deepjit")),
+        )
+
+
 def main() -> int:
     """Run every run-record check."""
     print("run record checks")
@@ -393,6 +574,11 @@ def main() -> int:
         test_missing_identity_field_rule,
         test_refusal_keeps_candidates,
         test_recorded_keys_are_all_identity_checked,
+        test_legacy_record_continues_as_cmake,
+        test_legacy_record_cannot_switch_to_deepjit,
+        test_legacy_record_ignores_a_deepjit_config_default,
+        test_recorded_backend_and_other_fields_stay_strict,
+        test_removed_deepjit_fields_do_not_conflict,
     ):
         test()
     print("\nall run record checks passed")

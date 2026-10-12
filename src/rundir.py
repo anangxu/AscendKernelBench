@@ -15,7 +15,12 @@ from typing import Any
 import yaml
 
 from ._paths import RUNS_DIR
-from .config import BuildBackend, parse_build_backend
+from .config import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
+    DeepJitConfig,
+    parse_build_backend,
+)
 from .io_util import (
     read_json_object,
     write_json_atomic,
@@ -72,11 +77,17 @@ def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
     recorded = _read_generation_config(run_dir)
     if not recorded:
         return generation_config
+    interpreted = _interpreted_build_backend(recorded)
+    if interpreted is not None:
+        recorded["build_backend"] = interpreted.value
     existing = _recorded_samples(run_dir, recorded)
     filled: dict[str, Any] = {}
     for key in _RUN_IDENTITY_KEYS:
         if key in recorded and key in generation_config:
-            if recorded[key] != generation_config[key]:
+            left, right = recorded[key], generation_config[key]
+            if key == "deepjit":
+                left, right = _normalized_deepjit(left), _normalized_deepjit(right)
+            if left != right:
                 raise ValueError(
                     f"{run_dir} records {key}={recorded[key]!r} but this "
                     f"request uses {generation_config[key]!r}; one run keeps "
@@ -236,21 +247,49 @@ def recorded_generation_defaults(run_dir: Path) -> dict[str, Any]:
     values: dict[str, Any] = {
         key: loaded[key] for key in _CONTINUATION_KEYS if key in loaded
     }
+    if "build_backend" not in values:
+        # A legacy record means cmake; inheriting it keeps the continuation on
+        # the build path the run actually used, whatever the config defaults to.
+        interpreted = _interpreted_build_backend(loaded)
+        if interpreted is not None:
+            values["build_backend"] = interpreted.value
     deepjit = loaded.get("deepjit")
     if isinstance(deepjit, dict):
         values["deepjit"] = dict(deepjit)
     return values
 
 
-def generation_build_backend(run_dir: Path) -> BuildBackend | None:
-    """Return the build backend recorded for a run, or None when absent."""
-    value = _read_generation_config(run_dir).get("build_backend")
-    if value is None:
+def _interpreted_build_backend(loaded: dict) -> BuildBackend | None:
+    """Interpret a record's build backend, or None when it has no record.
+
+    A record that predates the field only ever built through the CMake
+    template, so it means cmake rather than whatever the configuration
+    defaults to now. A record with an unknown value returns None.
+    """
+    if not loaded:
         return None
+    value = loaded.get("build_backend")
+    if value is None:
+        return DEFAULT_BUILD_BACKEND
     try:
         return parse_build_backend(value)
     except ValueError:
         return None
+
+
+def generation_build_backend(run_dir: Path) -> BuildBackend | None:
+    """Return the build backend a run uses, or None when it has no record."""
+    return _interpreted_build_backend(_read_generation_config(run_dir))
+
+
+def _normalized_deepjit(value: object) -> dict[str, Any]:
+    """Return a deepjit block as the current model sees it.
+
+    Fields that no longer exist are dropped on both sides of a comparison, so
+    removing a setting cannot make an older record look like a conflict.
+    """
+    raw = value if isinstance(value, dict) else {}
+    return DeepJitConfig.model_validate(raw).model_dump()
 
 
 def generation_deepjit(run_dir: Path) -> dict[str, Any]:
