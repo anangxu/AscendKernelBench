@@ -29,6 +29,9 @@ KernelBench task + hardware profile
        (marked sources: split kernel/launcher/host units + shared host PCH)
   -> eval_device.py: seeded correctness -> hidden value gate
        (d1..d4) -> NPU-event timing -> fresh-input re-check
+  -> Ascend C + build_backend=deepjit: build.py -> deepjit_build.py ->
+       extension with the embedded DeepJIT runtime -> prepare compiles the
+       device kernel -> generated launch stubs (docs/guide/deepjit.md)
   -> per-sample eval_result.json
   -> eval_results.json + pass_at_k_results.json -> score.py / scripts/analyze.py
 ```
@@ -39,6 +42,9 @@ device kernels above (compiled without torch headers), torch glue below
 (compiled as plain C++ against the shared PCH). The host wrapper launches
 kernels through generated `<kernel>_launch(numBlocks, stream, args...)`
 stubs. Unmarked legacy sources still build as a single ASC unit.
+The optional `// ==================== ASCEND_KERNEL_SECTION ====================`
+lines above the host marker split a multi-kernel device section into one
+deepjit compilation unit per entry; see `docs/guide/deepjit.md`.
 
 Current scope: generation and evaluation CLIs only. There is **no**
 automatic compile-error repair agent and no scheduler / multi-device queue.
@@ -89,6 +95,10 @@ CLI facts worth remembering:
   `model_new_py`, or two fenced code blocks. Endpoints that reject
   `response_format` (DeepSeek-compatible ones) answer the structured request
   with that JSON, so the JSON path is the one that runs there.
+* `scripts/generate.py --build-backend deepjit` (with `--deepjit-root` and an
+  optional `--deepjit-commit`) records the build backend and the DeepJIT
+  settings in the run; `scripts/evaluate.py` reads them from there. `cmake`
+  stays the default.
 * `scripts/_eval_worker.py` is internal. Never call it by hand; it is spawned
   by `eval.eval_sample`.
 * Offline analysis (`analyze.py`, `score.py`) needs neither torch nor an NPU.
@@ -101,13 +111,15 @@ CLI facts worth remembering:
 | `src/` | Engine: dataset, prompt, LLM, checks, eval, build, timing, scoring, reporting. |
 | `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `python_source.py`/`text.py` (entry points and masking). |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
+| `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, per-kernel unit split, generated runtime/launcher, host extension build, and the framework prepare entry. |
+| `tests/` | No-device suites with plain asserts (`python tests/test_deepjit_bridge.py`, `test_deepjit_generation.py`, `test_deepjit_version.py`, `test_run_record.py`, `test_generate_call_chain.py`, `test_deepjit_run_flow.py`); device behaviour is validated on an Ascend host, never here. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
 | `configs/hardware/*.yaml` | Hardware profiles validated by `config.HardwareProfile`. Default `ascend910b2`; `ascend950pr` is reserved and unvalidated. |
 | `configs/subsets/*.txt` | Fixed task subsets for comparable runs. `level1_20.txt` is every fifth level1 task, loaded with `--tasks-file`. Keep the lists stable. |
 | `requirements.txt` | Third-party dependencies; the only pip install file. |
 | `.pre-commit-config.yaml` | Optional Ruff and basic file hooks on `src/` and `scripts/`. |
-| `build_template/CMakeLists.txt` | The single build path that produces `libcustom_op.so`. |
+| `build_template/CMakeLists.txt` | The default build path that produces `libcustom_op.so`; `build_backend=deepjit` uses `deepjit_build.py` instead. |
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 
@@ -151,6 +163,16 @@ root (`src/` sits directly under that root).
 9. **Never reformat or edit vendored `KernelBench/` tasks** to satisfy lint.
 10. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
+
+11. **The deepjit build path is opt-in and framework-owned.** It applies to
+    Ascend C samples, one run records one build backend, and the framework
+    owns the DeepJIT runtime, the kernel source, and the cache: candidates
+    never run build commands. An unsupported source is refused with an
+    explicit build error and never falls back to CMake, and a missing DeepJIT
+    checkout never affects the CMake path. One compilation unit per kernel
+    entry: the split uses the explicit kernel-section marker lines only, never
+    a pattern that could cut a body, and every unit must hold exactly one
+    entry.
 
 ## Conventions
 
