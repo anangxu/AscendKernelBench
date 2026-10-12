@@ -52,10 +52,10 @@ A task's nonempty `TOLERANCE` mapping takes precedence over configured tolerance
 | `deepjit.env` | empty | environment applied inside the worker process for the build |
 | `deepjit.extra_cflags`, `deepjit.extra_ldflags` | empty | the `deepjit` build path |
 | `deepjit.cache_dir` | empty (sample-local `deepjit/cache`) | the `deepjit` build path |
-| `deepjit.build_timeout` | `1800` | the `deepjit` build path |
 
 `build_backend` is opt-in per run and applies to Ascend C samples only;
-`cmake` stays the default. See the [DeepJIT guide](../guide/deepjit.md).
+`cmake` stays the default. The DeepJIT path reuses the top-level
+`build_timeout`, which covers the host extension build. See the [DeepJIT guide](../guide/deepjit.md).
 
 Use positive trial counts and timeouts. Set `num_warmup` to a nonnegative integer. Configuration changes alter the evaluation protocol; preserve the exact YAML used when comparing results.
 

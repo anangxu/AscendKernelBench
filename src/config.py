@@ -127,7 +127,6 @@ class DeepJitConfig(BaseModel):
     extra_cflags: list[str] = Field(default_factory=list)
     extra_ldflags: list[str] = Field(default_factory=list)
     cache_dir: str = ""
-    build_timeout: int = 1800
 
 
 class EvalConfig(BaseModel):

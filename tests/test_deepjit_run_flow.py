@@ -117,6 +117,11 @@ def test_deepjit_run_reaches_the_worker() -> None:
         "soc_version" in payload,
         str(sorted(payload)),
     )
+    check(
+        "the worker keeps the top-level build timeout",
+        payload.get("build_timeout") == load_eval_config().build_timeout,
+        str(payload.get("build_timeout")),
+    )
     hardware = load_hardware_profile(load_eval_config().hardware)
     check(
         "the payload keeps the recorded arch",

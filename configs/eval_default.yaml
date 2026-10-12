@@ -15,7 +15,6 @@ deepjit:
   extra_cflags: []
   extra_ldflags: []
   cache_dir: ""
-  build_timeout: 1800
 
 ########################### CORRECTNESS ###########################
 # Five seeded trials, all must pass (docs/guide/evaluation.md).

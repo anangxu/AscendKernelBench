@@ -482,7 +482,6 @@ def build_custom_op(
             asc_source,
             Path(work_dir),
             settings=deepjit or DeepJitConfig(),
-            timeout_s=timeout_s,
             soc_version=soc_version,
         )
     work_dir = Path(work_dir)
@@ -536,7 +535,6 @@ def _build_via_deepjit(
     work_dir: Path,
     *,
     settings: DeepJitConfig,
-    timeout_s: int,
     soc_version: str,
 ) -> Path:
     """Build the sample through the DeepJIT path, raising BuildError."""
@@ -550,7 +548,6 @@ def _build_via_deepjit(
             work_dir,
             settings=settings,
             soc_version=soc_version,
-            timeout_s=timeout_s,
         )
     except DeepJitBuildError as exc:
         raise BuildError(str(exc)) from None

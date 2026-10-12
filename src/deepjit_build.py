@@ -33,7 +33,6 @@ _COMMIT_RE = re.compile(r"[0-9a-f]{40,64}")
 # Generated layout inside the sample directory.
 DEEPJIT_DIR_NAME = "deepjit"
 DEEPJIT_KERNEL_DIR_NAME = "akb_deepjit_kernel"
-DEEPJIT_KERNEL_FILE_NAME = "kernel_0.hpp"
 DEEPJIT_KERNEL_PREFIX = DEEPJIT_KERNEL_DIR_NAME + "/"
 DEEPJIT_RUNTIME_HEADER_NAME = "akb_deepjit_runtime.hpp"
 DEEPJIT_LAUNCHER_NAME = "akb_deepjit_launcher.cpp"
@@ -655,18 +654,19 @@ def _prepare_layout(
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    facts = DeepJitPaths(
+        root=root,
+        library_root=generated,
+        commit=effective_commit,
+        cache_dir=cache_dir,
+        build_dir=generated / "build",
+        kernel_source=kernel_paths[0],
+        signature=_signature(effective_commit, soc_version, worktree),
+    )
     _write_if_changed(
         generated / DEEPJIT_RUNTIME_HEADER_NAME,
         _runtime_header(
-            DeepJitPaths(
-                root=root,
-                library_root=generated,
-                commit=effective_commit,
-                cache_dir=cache_dir,
-                build_dir=generated / "build",
-                kernel_source=kernel_paths[0],
-                signature=_signature(effective_commit, soc_version, worktree),
-            ),
+            facts,
             [
                 _require_safe_path(item, "deepjit include dir")
                 for item in settings.include_dirs
@@ -682,16 +682,6 @@ def _prepare_layout(
     )
     _write_if_changed(generated / DEEPJIT_HOST_NAME, _host_source(host_src))
 
-    signature_text = _signature(effective_commit, soc_version, worktree)
-    facts = DeepJitPaths(
-        root=root,
-        library_root=generated,
-        commit=effective_commit,
-        cache_dir=cache_dir,
-        build_dir=generated / "build",
-        kernel_source=kernel_paths[0],
-        signature=signature_text,
-    )
     _write_if_changed(
         generated / DEEPJIT_FACTS_NAME,
         json.dumps(
@@ -812,7 +802,6 @@ def build_deepjit_op(
     *,
     settings: DeepJitConfig,
     soc_version: str = "",
-    timeout_s: int = 1800,
 ) -> tuple[Path, DeepJitPaths]:
     """Build the sample's host library with the embedded DeepJIT runtime.
 

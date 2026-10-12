@@ -289,7 +289,14 @@ def test_deepjit_config_defaults() -> None:
     settings = DeepJitConfig()
     check("no root by default", settings.root == "")
     check("no cache dir by default", settings.cache_dir == "")
-    check("build timeout has a default", settings.build_timeout > 0)
+    check(
+        "the deepjit block carries no timeout of its own",
+        "build_timeout" not in DeepJitConfig().model_dump(),
+    )
+    check(
+        "the top-level build timeout survives",
+        load_eval_config().build_timeout > 0,
+    )
 
 
 def main() -> int:

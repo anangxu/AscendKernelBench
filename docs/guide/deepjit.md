@@ -26,7 +26,6 @@ deepjit:
   extra_cflags: []
   extra_ldflags: []
   cache_dir: ""             # empty means <sample>/deepjit/cache
-  build_timeout: 1800
 ```
 
 Every path is local machine configuration; nothing machine-specific is
