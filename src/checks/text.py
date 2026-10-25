@@ -19,6 +19,13 @@ HOST_SECTION_MARKER_RE = re.compile(
     r"^\s*//[\s=]*" + HOST_SECTION_MARKER + r"[\s=]*$", re.MULTILINE
 )
 
+# Optional split of the device section into one compiled unit per kernel entry
+# for the deepjit build backend; see docs/guide/deepjit.md.
+KERNEL_SECTION_MARKER = "ASCEND_KERNEL_SECTION"
+KERNEL_SECTION_MARKER_RE = re.compile(
+    r"^\s*//[\s=]*" + KERNEL_SECTION_MARKER + r"[\s=]*$"
+)
+
 
 def _byte_col_to_char_col(line: str, byte_col: int) -> int:
     """Convert an AST UTF-8 byte column to a Python code-point column."""

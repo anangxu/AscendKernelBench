@@ -12,10 +12,13 @@ from pydantic import BaseModel, ConfigDict
 
 from . import rundir
 from .config import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
     load_hardware_profile,
+    parse_build_backend,
 )
 from .dataset import Task, discover_tasks, load_task
 from .log import die
@@ -53,6 +56,8 @@ class GenerationSettings(BaseModel):
     max_tokens: int
     num_samples: int
     reasoning_effort: str | None = None
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND
+    deepjit: dict[str, object] = {}
 
 
 def resolve_generation_settings(
@@ -64,6 +69,9 @@ def resolve_generation_settings(
     num_samples: int | None = None,
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
+    build_backend: str | None = None,
+    deepjit_root: str | None = None,
+    deepjit_commit: str | None = None,
 ) -> GenerationSettings:
     """Resolve generation settings from YAML with optional CLI overrides.
 
@@ -84,6 +92,22 @@ def resolve_generation_settings(
         raise ValueError(
             f"num_samples must be a positive integer, got {resolved_samples}"
         )
+    resolved_build_backend = parse_build_backend(
+        build_backend if build_backend is not None else config.build_backend
+    )
+    deepjit: dict[str, object] = {}
+    if resolved_build_backend is BuildBackend.DEEPJIT:
+        values = config.deepjit.model_copy(
+            update={
+                key: value
+                for key, value in (
+                    ("root", deepjit_root),
+                    ("commit", deepjit_commit),
+                )
+                if value
+            }
+        )
+        deepjit = values.model_dump()
     return GenerationSettings(
         model=model or str(gen_cfg.get("model", "deepseek-flash")),
         prompt_mode=prompt_mode or str(gen_cfg.get("prompt_mode", "one_shot")),
@@ -97,6 +121,8 @@ def resolve_generation_settings(
         ),
         num_samples=resolved_samples,
         reasoning_effort=effort or None,
+        build_backend=resolved_build_backend,
+        deepjit=deepjit,
     )
 
 
@@ -187,9 +213,12 @@ def generation_run_config(
         "prompt_mode": settings.prompt_mode,
         "num_samples": settings.num_samples,
         "reasoning_effort": settings.reasoning_effort,
+        "build_backend": settings.build_backend.value,
         "hardware": hardware_name,
         "tasks": list(task_ids),
     }
+    if settings.deepjit:
+        payload["deepjit"] = dict(settings.deepjit)
     if hardware_file:
         payload["hardware_file"] = hardware_file
     return payload

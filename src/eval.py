@@ -16,12 +16,16 @@ from loguru import logger
 from . import rundir
 from .checker import check_custom_op_asc, check_model_new
 from .config import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
+    DeepJitConfig,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
     load_hardware_profile,
 )
 from .dataset import Task, load_task
+from .deepjit_build import resolve_deepjit_settings
 from .eval_device import eval_sample_on_device
 from .eval_result import fail_result
 from .io_util import (
@@ -53,17 +57,50 @@ def _persist_eval_result(
     return result
 
 
-def _load_run_settings(run_dir: Path) -> tuple[EvalConfig, HardwareProfile]:
-    """Load the default protocol and the hardware recorded for run_dir."""
+def _resolve_build_settings(
+    run_dir: Path, config: EvalConfig
+) -> tuple[BuildBackend, DeepJitConfig]:
+    """Resolve the build backend and DeepJIT settings for one run.
+
+    The run record wins over the evaluation config, so one run keeps the same
+    build path no matter how the config file changed since.
+
+    Raises:
+        ValueError: If DeepJIT is selected without a checkout to build against.
+    """
+    build_backend = rundir.generation_build_backend(run_dir) or config.build_backend
+    recorded = rundir.generation_deepjit(run_dir)
+    settings = resolve_deepjit_settings(
+        DeepJitConfig.model_validate({**config.deepjit.model_dump(), **recorded})
+    )
+    if build_backend is BuildBackend.DEEPJIT and not settings.root:
+        raise ValueError(
+            "build_backend=deepjit needs a DeepJIT checkout: set deepjit.root "
+            "in the evaluation config, record it in the run, or export "
+            "DEEPJIT_ROOT"
+        )
+    return build_backend, settings
+
+
+def _load_run_settings(
+    run_dir: Path,
+) -> tuple[EvalConfig, HardwareProfile, BuildBackend, DeepJitConfig]:
+    """Load the protocol, the hardware, and the build path recorded for a run."""
     config = load_eval_config()
+    build_backend, deepjit = _resolve_build_settings(run_dir, config)
     hardware_file = rundir.generation_hardware_file(run_dir)
     if hardware_file:
         try:
-            return config, load_hardware_profile(hardware_file)
+            return (
+                config,
+                load_hardware_profile(hardware_file),
+                build_backend,
+                deepjit,
+            )
         except (OSError, ValueError, yaml.YAMLError) as exc:
             logger.warning("ignoring recorded hardware_file {}: {}", hardware_file, exc)
     hw_name = rundir.generation_hardware_name(run_dir) or config.hardware
-    return config, load_hardware_profile(hw_name)
+    return config, load_hardware_profile(hw_name), build_backend, deepjit
 
 
 def eval_sample(
@@ -72,6 +109,8 @@ def eval_sample(
     *,
     hardware: HardwareProfile,
     config: EvalConfig,
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
+    deepjit: DeepJitConfig | None = None,
     harness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
@@ -109,7 +148,10 @@ def eval_sample(
         {
             "task_py": task.task_py,
             "sample_dir": str(sample_dir),
+            "build_backend": build_backend.value,
+            "deepjit": (deepjit or DeepJitConfig()).model_dump(),
             "cmake_arch": hardware.cmake_arch,
+            "soc_version": hardware.soc_version,
             "hardware_name": hardware.name,
             "device": "npu:0",
             "seed": config.seed,
@@ -156,7 +198,7 @@ def evaluate_run(
             raise ValueError(f"no samples in {run_dir} for level {level}")
         raise ValueError(f"no samples in {run_dir}")
 
-    config, hardware = _load_run_settings(run_dir)
+    config, hardware, build_backend, deepjit = _load_run_settings(run_dir)
     harness = rundir.generation_harness(run_dir)
     for task_id, sample_id, sample_path in samples:
         result = eval_sample(
@@ -164,8 +206,14 @@ def evaluate_run(
             sample_path,
             hardware=hardware,
             config=config,
+            build_backend=build_backend,
+            deepjit=deepjit,
             harness=harness,
         )
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["build_backend"] = build_backend.value
+            write_json_atomic(sample_path / "eval_result.json", result)
         if on_sample is not None:
             on_sample(task_id, sample_id, result)
 
