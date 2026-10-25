@@ -191,6 +191,10 @@ root (`src/` sits directly under that root).
     is never reported as a compiled sample. `first_call_seconds` is a compound
     trace+compile+launch figure and must not be called a compile time.
     Formal evaluation uses NPU execution and refuses simulator selection.
+    Finish PyTorch input preparation and mutation snapshots before launching
+    pyasc kernels on their independent runtime stream.
+    A launcher must also synchronize its own PyTorch padding or copy work
+    before a pyasc launch; torch.npu.synchronize is allowed for this backend.
 11. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
 

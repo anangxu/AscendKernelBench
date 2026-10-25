@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,26 +23,48 @@ from src.io_util import write_json_atomic, write_text_atomic
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "src/prompts/examples"
+
+
+@dataclass(frozen=True)
+class SmokeCase:
+    """Candidate example with an optional reference task override."""
+
+    example: str
+    backend: Backend
+    build_backend: BuildBackend
+    task_path: Path | None = None
+
+
 CASES = {
-    "cmake_add": ("001_elementwise_add", Backend.ASCENDC, BuildBackend.CMAKE),
-    "cmake_leaky_relu": ("002_leaky_relu", Backend.ASCENDC, BuildBackend.CMAKE),
-    "cmake_two_stage_sum": (
+    "cmake_add": SmokeCase("001_elementwise_add", Backend.ASCENDC, BuildBackend.CMAKE),
+    "cmake_leaky_relu": SmokeCase(
+        "002_leaky_relu", Backend.ASCENDC, BuildBackend.CMAKE
+    ),
+    "cmake_two_stage_sum": SmokeCase(
         "deepjit/002_two_stage_sum",
         Backend.ASCENDC,
         BuildBackend.CMAKE,
     ),
-    "deepjit_add": (
+    "deepjit_add": SmokeCase(
         "deepjit/001_elementwise_add",
         Backend.ASCENDC,
         BuildBackend.DEEPJIT,
     ),
-    "deepjit_two_stage_sum": (
+    "deepjit_two_stage_sum": SmokeCase(
         "deepjit/002_two_stage_sum",
         Backend.ASCENDC,
         BuildBackend.DEEPJIT,
     ),
-    "pyasc_add": ("pyasc/001_elementwise_add", Backend.PYASC, BuildBackend.CMAKE),
-    "pyasc_rowsum": ("pyasc/003_rowsum", Backend.PYASC, BuildBackend.CMAKE),
+    "pyasc_add": SmokeCase(
+        "pyasc/001_elementwise_add", Backend.PYASC, BuildBackend.CMAKE
+    ),
+    "pyasc_add_unaligned": SmokeCase(
+        "pyasc/001_elementwise_add",
+        Backend.PYASC,
+        BuildBackend.CMAKE,
+        task_path=ROOT / "tests/fixtures/pyasc/add_unaligned/task.py",
+    ),
+    "pyasc_rowsum": SmokeCase("pyasc/003_rowsum", Backend.PYASC, BuildBackend.CMAKE),
 }
 
 
@@ -65,10 +88,12 @@ def main() -> int:
     output = args.output.resolve()
     records = []
     for name in args.case or CASES:
-        relative, backend, build_backend = CASES[name]
-        example = EXAMPLES / relative
-        source = (example / "task.py").read_text()
-        task = Task(f"level1/{name}", 1, name, example / "task.py", source)
+        case = CASES[name]
+        backend, build_backend = case.backend, case.build_backend
+        example = EXAMPLES / case.example
+        task_path = case.task_path or example / "task.py"
+        source = task_path.read_text()
+        task = Task(f"level1/{name}", 1, name, task_path, source)
         sample = output / name
         for filename in (
             "model_new.py",

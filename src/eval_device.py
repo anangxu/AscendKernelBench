@@ -445,6 +445,7 @@ class SampleEvaluator:
                 backend=backend,
             )
         try:
+            self._synchronize_pyasc_inputs()
             seconds, first_out = time_first_call(lambda: self.new_model(*inputs))
             self.torch.npu.synchronize()
         except PyAscJITError as exc:
@@ -539,6 +540,11 @@ class SampleEvaluator:
     def _process_input(self, value: Any) -> Any:
         """Move one argument onto the evaluation device."""
         return move_value_to_device(value, self.torch_device, self.dtype)
+
+    def _synchronize_pyasc_inputs(self) -> None:
+        """Complete PyTorch work before pyasc uses its independent stream."""
+        if self.backend is Backend.PYASC:
+            self.torch.npu.synchronize(device=self.req.device)
 
     def _outputs_ok(self, ref: Any, new: Any) -> bool:
         """Compare candidate outputs under the active reference mode."""
@@ -649,6 +655,7 @@ class SampleEvaluator:
             }
         ref_snapshot = snapshot_inputs(inputs)
         try:
+            self._synchronize_pyasc_inputs()
             new_out = self.new_model(*inputs)
             self.torch.npu.synchronize(device=self.req.device)
         except Exception as exc:
@@ -681,6 +688,7 @@ class SampleEvaluator:
         ref_out = self._run_reference(inputs, raw_inputs, trial)
         ref_snapshot = snapshot_inputs(inputs)
         try:
+            self._synchronize_pyasc_inputs()
             new_out = self.new_model(*inputs)
             self.torch.npu.synchronize(device=self.req.device)
         except Exception as exc:

@@ -128,7 +128,7 @@ python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
 
 `--output PATH` is a required directory; case subdirectories and the aggregate
-`smoke_results.json` are written inside it. Without `--case`, all seven cases
+`smoke_results.json` are written inside it. Without `--case`, all eight cases
 run once. `--case NAME` may be repeated to select cases; `--help` lists their
 names. `--repeat 2` runs each selected case twice to exercise warm builds,
 and `--hardware` defaults to `ascend910b2`. The complete suite covers

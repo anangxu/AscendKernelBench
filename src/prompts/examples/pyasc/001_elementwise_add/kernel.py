@@ -94,13 +94,16 @@ def add_launch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     if padded == total:
         z = torch.empty_like(x)
         add_kernel[cores, rt.current_stream()](x, y, z, block_len, tiles, tile_len)
+        rt.synchronize()
         return z
     x_pad = torch.zeros(padded, dtype=x.dtype, device=x.device)
     y_pad = torch.zeros(padded, dtype=y.dtype, device=y.device)
     x_pad[:total] = x.reshape(-1)
     y_pad[:total] = y.reshape(-1)
     z_pad = torch.empty_like(x_pad)
+    torch.npu.synchronize()
     add_kernel[cores, rt.current_stream()](
         x_pad, y_pad, z_pad, block_len, tiles, tile_len
     )
+    rt.synchronize()
     return z_pad[:total].reshape(x.shape)

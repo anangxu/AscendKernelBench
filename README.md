@@ -76,6 +76,10 @@ rejected. See the [DeepJIT guide](docs/guide/deepjit.md) and
 [pyasc guide](docs/guide/pyasc-backend.md). pyasc timing includes host dispatch
 and launch overhead. Compare latency and speedup only within the same timing
 scope; pyasc latency is not device-only latency.
+The evaluator completes PyTorch input preparation and mutation snapshots
+before invoking pyasc kernels on their independent stream.
+A pyasc launcher must also finish any Torch padding or copy work it queues
+before starting a kernel on that stream.
 
 The current workflow supports generation and evaluation scripts. It does
 not implement an automatic compile-error repair agent.

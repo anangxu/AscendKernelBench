@@ -808,6 +808,12 @@ class WrapperSemantics(ast.NodeVisitor):
         if not isinstance(node.func, ast.Name):
             return flagged
         name = node.func.id
+        if name in {"setattr", "delattr"} and len(node.args) >= 2:
+            base = self._resolve(node.args[0])
+            attribute = self._constant_string(node.args[1])
+            if self._is_pyasc_torch_sync(f"{base}.{attribute}"):
+                self._flag("Reassigns timing function (monkey patch detected)")
+                return True
         if name in _DYNAMIC_CALLS:
             self._flag(f"dynamic code execution ({name}())")
             return True
@@ -826,8 +832,26 @@ class WrapperSemantics(ast.NodeVisitor):
                 return True
         return flagged
 
+    def _is_pyasc_torch_sync(self, path: str | None) -> bool:
+        """Identify the one Torch synchronization call allowed for pyasc."""
+        return (
+            self.sink is not None
+            and self.sink.kind == "kernel"
+            and path == "torch.npu.synchronize"
+        )
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        """Protect the pyasc synchronization boundary from reassignment."""
+        if isinstance(node.ctx, (ast.Store, ast.Del)) and self._is_pyasc_torch_sync(
+            self._resolve(node)
+        ):
+            self._flag("Reassigns timing function (monkey patch detected)")
+        self.generic_visit(node)
+
     def _flag_resolved_call(self, func_path: str) -> bool:
         """Flag vendor, functional, and disallowed torch.* calls."""
+        if self._is_pyasc_torch_sync(func_path):
+            return False
         if func_path.startswith("torch_npu."):
             self._flag(f"vendor native op shortcut: {func_path}()")
             return True

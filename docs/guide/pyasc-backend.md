@@ -138,6 +138,14 @@ device, the pyasc release and the call style named with it:
   directory and is exported before `asc` is imported, because pyasc resolves
   the cache location at import time. Samples therefore cannot share compiled
   kernels even when they reuse kernel function names.
+* **Stream ordering.** The evaluator completes PyTorch input preparation and
+  input-mutation snapshots before launching pyasc on its independent stream.
+  If a launcher fills or copies Torch buffers for padding, it must call
+  `torch.npu.synchronize(device=x.device)` after those writes and before
+  the pyasc launch. This exact synchronization call is permitted for
+  pyasc; Torch event and stream manipulation remain forbidden.
+  `rt.synchronize()` waits for the pyasc stream and does not order earlier
+  Torch writes against a launch on that separate stream.
 * **Timing.** pyasc 1.1.1 launches on its own runtime stream and synchronizes
   at the end of each call. The evaluator uses synchronized wall-clock timing
   for both the candidate and its live NPU reference. Metadata records

@@ -175,7 +175,9 @@ def test_first_call_failure_is_a_jit_failure() -> None:
     """A failing first call is classified as jit and never as compiled."""
     with tempfile.TemporaryDirectory() as tmp:
         evaluator = SampleEvaluator(make_request(Path(tmp), "pyasc"))
-        evaluator.torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None)
+        )
         evaluator.get_inputs = lambda: []
         evaluator._process_input = lambda value: value
 
@@ -204,7 +206,9 @@ def test_first_call_success_records_seconds_and_rebuilds() -> None:
     """A good first call records first_call_seconds and rebuilds the models."""
     with tempfile.TemporaryDirectory() as tmp:
         evaluator = SampleEvaluator(make_request(Path(tmp), "pyasc"))
-        evaluator.torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None))
+        evaluator.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None)
+        )
         evaluator.get_inputs = lambda: []
         evaluator._process_input = lambda value: value
         evaluator.new_model = lambda *args: None
@@ -443,7 +447,9 @@ def test_unsupported_dtype_is_reported_not_casted() -> None:
 
     def evaluator_for(dtype: str):
         ev = SampleEvaluator(make_request(Path(tempfile.mkdtemp()), "pyasc"))
-        ev.torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None))
+        ev.torch = SimpleNamespace(
+            npu=SimpleNamespace(synchronize=lambda **kwargs: None)
+        )
         ev.get_inputs = lambda: [FakeTensor(dtype)]
         # Stand in for move_value_to_device: record every cast so a rejection
         # that happens after the cast cannot pass as pre-cast.

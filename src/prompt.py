@@ -145,7 +145,10 @@ Output exactly two fenced code blocks, tagged with their filenames:
       launcher ends with `rt.synchronize()`, so a launched kernel is
       synchronous. The evaluator selects the execution platform and the NPU
       device before the launcher runs, so the module must not call
-      `asc.runtime.config.set_platform` itself.
+      `asc.runtime.config.set_platform` itself. After any Torch device copies
+      or initialization in the launcher, call `torch.npu.synchronize()` before
+      launching on the asc stream. `rt.synchronize()` waits only for the asc
+      stream and cannot complete pending Torch work.
    Inside a `@asc.jit` kernel use only the real pyasc device API, for
    example:
    - `asc.GlobalTensor()`, `gm.set_global_buffer(addr[, length])`, and
@@ -191,13 +194,14 @@ Output exactly two fenced code blocks, tagged with their filenames:
      pass their `.weight` / `.bias` tensors into the launcher.
 
 The host side may only do shape arithmetic, argument preparation, output
-allocation, and kernel launch. All tensor compute must happen in the
-`@asc.jit` kernels: no PyTorch, NumPy, CPU, or vendor-native compute may be
-used as a substitute for the device kernels, and no `torch` operator may
-appear in a launcher or in `ModelNew.forward` other than allocation and
-integer shape arithmetic (shapes, strides, counts). Do not output any test
-code, `if __name__ == "__main__"` blocks, or prose between the two code
-blocks.
+allocation, data movement, required synchronization, and kernel launch.
+All tensor compute must happen in the `@asc.jit` kernels: no PyTorch, NumPy,
+CPU, or vendor-native compute may substitute for the device kernels. No
+`torch` operator may
+appear in a launcher or in `ModelNew.forward` other than allocation, data
+movement, `torch.npu.synchronize()`, and integer shape arithmetic (shapes,
+strides, counts). Do not output any test code, `if __name__ == "__main__"`
+blocks, or prose between the two code blocks.
 """
 
 PYASC_INSTRUCTION = """\
