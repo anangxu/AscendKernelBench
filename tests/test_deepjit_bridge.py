@@ -170,6 +170,7 @@ def test_signature_tracks_checkout_state() -> None:
         cache_dir=Path("/tmp/cache"),
         kernel_source=Path(__file__),
         signature=clean,
+        dependency_hash="abc123",
     )
     facts = build_facts(paths, ["a"], "dirty")
     check("facts record the checkout state", facts["deepjit_worktree"] == "dirty")
@@ -291,7 +292,7 @@ def test_launcher_text() -> None:
     )
     check(
         "prepare is a C ABI status entry",
-        'extern "C" int akb_deepjit_prepare(char* error_message, int error_size)'
+        'extern "C" int ascend_kernel_bench_deepjit_prepare(char* error_message, int error_size)'
         in launcher,
     )
     check(
@@ -345,6 +346,7 @@ def test_build_facts() -> None:
         cache_dir=Path("/tmp/cache"),
         kernel_source=Path(__file__),
         signature="sig",
+        dependency_hash="abc123",
     )
     facts = build_facts(paths, ["partial_sum", "finalize_sum"])
     check("facts name the build backend", facts["build_backend"] == "deepjit")

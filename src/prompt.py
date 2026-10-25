@@ -1,7 +1,8 @@
 """Component-based prompt construction (docs/reference/configuration.md).
 
 Sections assemble in order: problem statement, hardware block, examples block,
-output contract, instruction. Modes: zero_shot, one_shot, few_shot.
+output contract, instruction. Modes: zero_shot, one_shot, few_shot. The
+backend selects the authoring language: Ascend C or pyasc.
 """
 
 from __future__ import annotations
@@ -12,11 +13,11 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from ._paths import PROMPT_EXAMPLES_DIR
+from .backend import DEFAULT_BACKEND, Backend, sample_files, validate_backend_build
 from .config import (
     DEFAULT_BUILD_BACKEND,
     BuildBackend,
     HardwareProfile,
-    parse_build_backend,
 )
 from .dataset import Task
 
@@ -112,6 +113,102 @@ Ascend C API shown in the example. The evaluator will compile this file with
 its fixed CMake project into libcustom_op.so and load that library with
 torch.ops.load_library; you only write the two code blocks defined by the
 Output Contract.
+"""
+
+PYASC_SYSTEM_PROMPT = (
+    "You are an expert Ascend kernel engineer. You write correct, "
+    "high-performance operators for Huawei Ascend NPUs with pyasc, the "
+    "official CANN Python DSL (package pyasc, import name asc). The "
+    "benchmark launches your kernels from plain Python inside the evaluating "
+    "PyTorch process: kernel.py holds one or more @asc.jit kernels plus a "
+    "plain-Python host launcher function, and model_new.py calls that "
+    "launcher. All tensor compute runs on the device inside the @asc.jit "
+    "kernels; the host side only prepares arguments and launches."
+)
+
+PYASC_OUTPUT_CONTRACT = """\
+## Output Contract
+
+Output exactly two fenced code blocks, tagged with their filenames:
+
+1. ```kernel.py — the pyasc kernel module. It has two parts:
+   a. one or more kernels decorated with `@asc.jit`. A kernel parameter is
+      an `asc.GlobalAddress` when it is a device tensor, a plain `int` /
+      `float` / `bool` when it is a runtime scalar, and
+      `asc.ConstExpr[int]` / `asc.ConstExpr[float]` when it is a compile-time
+      constant. Calling a kernel never returns a value: each output is
+      written into a tensor that is passed in;
+   b. a plain-Python host launcher function (no `@asc.jit`) that prepares
+      arguments, allocates every output with `torch.empty` / `torch.empty_like`,
+      launches the kernel as `kernel[core_num, rt.current_stream()](x, y, out, ...)`
+      with `import asc.lib.runtime as rt`, and returns the output tensors. The
+      launcher ends with `rt.synchronize()`, so a launched kernel is
+      synchronous. The evaluator selects the execution platform and the NPU
+      device before the launcher runs, so the module must not call
+      `asc.runtime.config.set_platform` itself.
+   Inside a `@asc.jit` kernel use only the real pyasc device API, for
+   example:
+   - `asc.GlobalTensor()`, `gm.set_global_buffer(addr[, length])`, and
+     `gm[offset:]` slicing to address a device buffer;
+   - `asc.get_block_idx()` with one core-count constant to partition work
+     across cores;
+   - `asc.LocalTensor(dtype, asc.TPosition.VECIN, offset, length)`,
+     `asc.data_copy(dst, src, count)`, and vector ops such as
+     `asc.add(dst, a, b, count)`. A `data_copy` count is in elements; keep
+     it to whole 32-byte blocks, because a shorter write-back can silently
+     leave the destination unchanged on the target device;
+   - every data path needs the dependency its consumer requires; the queue
+     alone does not supply it. A copy straight from the inbound buffer to GM
+     needs `asc.HardEvent.MTE2_MTE3`; a vector operation consuming the inbound
+     buffer needs `MTE2_V` and the write-back of its result needs `V_MTE3`; a
+     loop that reuses one buffer also has to keep the previous reader finished
+     before the buffer is overwritten. Take the event id from
+     `pipe.alloc_event_id(<event>)` rather than a literal, and do not add
+     `MTE2_MTE3` in front of a write-back whose producer is the vector unit;
+   - `asc.set_flag(asc.HardEvent.MTE2_V, id)` and
+     `asc.wait_flag(asc.HardEvent.MTE2_V, id)` when explicit pipe
+     synchronization is needed, choosing the event that matches the
+     consumer's pipe (MTE2_V before a vector op, MTE2_MTE3 before a
+     write-back copy), or the TPipe style
+     (`pipe = asc.TPipe()`, `asc.TQue(asc.TPosition.VECIN, BUFFER_NUM)`,
+     `pipe.init_buffer(q, BUFFER_NUM, length * dtype.sizeof())`,
+     `q.alloc_tensor(dtype)`, `q.enque(t)`, `q.deque(dtype)`,
+     `q.free_tensor(t)`). The TQue idiom was measured exact when a vector
+     operation sits between the copies, so prefer that shape over a bare
+     copy through one queue.
+   The dtype comes from the tensor annotation (`x.dtype`) and
+   `dtype.sizeof()` gives its element size. A helper kernel may itself be
+   decorated with `@asc.jit`.
+2. ```model_new.py — class `ModelNew` with the SAME `__init__` and `forward`
+   signatures as the reference `Model`. Import the launcher from kernel.py
+   (`from kernel import run`) and call it; shape bookkeeping is fine, but
+   every tensor computation must happen inside the `@asc.jit` kernels.
+   - Parameters: if the reference `Model` has parameters (e.g. `nn.Conv2d`,
+     `nn.Linear`, norm layers), you MAY instantiate the same `nn` modules in
+     `ModelNew.__init__` as parameter containers — the evaluator seeds the
+     RNG identically before constructing `Model` and `ModelNew`, so identical
+     construction yields identical weights — but you must NEVER call them;
+     pass their `.weight` / `.bias` tensors into the launcher.
+
+The host side may only do shape arithmetic, argument preparation, output
+allocation, and kernel launch. All tensor compute must happen in the
+`@asc.jit` kernels: no PyTorch, NumPy, CPU, or vendor-native compute may be
+used as a substitute for the device kernels, and no `torch` operator may
+appear in a launcher or in `ModelNew.forward` other than allocation and
+integer shape arithmetic (shapes, strides, counts). Do not output any test
+code, `if __name__ == "__main__"` blocks, or prose between the two code
+blocks.
+"""
+
+PYASC_INSTRUCTION = """\
+## Instruction
+
+Implement the operator defined by the reference model above with pyasc, the
+official CANN Python DSL, on the target NPU. Generate real, runnable code:
+every API you use must exist in the pyasc API shown in the example. The
+evaluator imports kernel.py and model_new.py, calls the launcher, and
+compares the device result against the reference model; you only write the
+two code blocks defined by the Output Contract.
 """
 
 
@@ -259,19 +356,23 @@ class PromptExample(BaseModel):
 
     name: str
     task_py: str
-    custom_op_asc: str
+    kernel_src: str
+    kernel_tag: str
     model_new_py: str
 
+    @property
+    def custom_op_asc(self) -> str:
+        """Return the Ascend C source for legacy example consumers."""
+        return self.kernel_src
 
-# The Ascend C CMake pool is the top level of the examples directory; the
-# deepjit path has its own pool because its host rules differ.
+
 DEEPJIT_EXAMPLE_SUBDIR = "deepjit"
 
 
-def _example_pool_dir(
-    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
-) -> Path:
-    """Return the prompt-example directory that serves one build path."""
+def _example_pool_dir(backend: Backend, build_backend: BuildBackend) -> Path:
+    """Return the example pool for the authoring and build paths."""
+    if backend is Backend.PYASC:
+        return PROMPT_EXAMPLES_DIR / "pyasc"
     if build_backend is BuildBackend.DEEPJIT:
         return PROMPT_EXAMPLES_DIR / DEEPJIT_EXAMPLE_SUBDIR
     return PROMPT_EXAMPLES_DIR
@@ -279,31 +380,31 @@ def _example_pool_dir(
 
 def load_examples(
     build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
+    *,
+    backend: Backend | str = DEFAULT_BACKEND,
 ) -> list[PromptExample]:
-    """Load verified few-shot example assets shipped with the engine.
-
-    Args:
-        build_backend: Build path whose example pool is used.
-
-    Raises:
-        OSError: If an example directory is missing a required file.
-    """
-    examples: list[PromptExample] = []
-    pool_dir = _example_pool_dir(parse_build_backend(build_backend))
-    for example_dir in sorted(pool_dir.iterdir()):
+    """Load the verified examples for one authoring and build path."""
+    resolved, build = validate_backend_build(backend, build_backend)
+    kernel_file, wrapper_file = sample_files(resolved)
+    examples = []
+    for example_dir in sorted(_example_pool_dir(resolved, build).iterdir()):
         if not example_dir.is_dir() or not (example_dir / "task.py").is_file():
             continue
         examples.append(
             PromptExample(
                 name=example_dir.name,
                 task_py=(example_dir / "task.py").read_text(encoding="utf-8"),
-                custom_op_asc=(example_dir / "custom_op.asc").read_text(
-                    encoding="utf-8"
-                ),
-                model_new_py=(example_dir / "model_new.py").read_text(encoding="utf-8"),
+                kernel_src=(example_dir / kernel_file).read_text(encoding="utf-8"),
+                kernel_tag=kernel_file,
+                model_new_py=(example_dir / wrapper_file).read_text(encoding="utf-8"),
             )
         )
     return examples
+
+
+def load_pyasc_examples() -> list[PromptExample]:
+    """Load the verified pyasc examples."""
+    return load_examples(backend=Backend.PYASC)
 
 
 class PromptBuilder:
@@ -314,13 +415,16 @@ class PromptBuilder:
         task: Task,
         hardware: HardwareProfile,
         *,
+        backend: Backend | str = DEFAULT_BACKEND,
         build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
         examples: list[PromptExample] | None = None,
     ) -> None:
         """Bind the task, hardware, build path, and optional example override."""
         self.task = task
         self.hardware = hardware
-        self.build_backend = parse_build_backend(build_backend)
+        self.backend, self.build_backend = validate_backend_build(
+            backend, build_backend
+        )
         self._examples = examples
 
     def build(self, mode: str | PromptMode = PromptMode.ONE_SHOT) -> str:
@@ -346,6 +450,8 @@ class PromptBuilder:
 
     def _wording(self) -> tuple[str, str]:
         """Return the (output contract, instruction) pair for this path."""
+        if self.backend is Backend.PYASC:
+            return PYASC_OUTPUT_CONTRACT, PYASC_INSTRUCTION
         if self.build_backend is BuildBackend.DEEPJIT:
             return DEEPJIT_OUTPUT_CONTRACT, DEEPJIT_INSTRUCTION
         return OUTPUT_CONTRACT, INSTRUCTION
@@ -357,7 +463,7 @@ class PromptBuilder:
         pool = (
             self._examples
             if self._examples is not None
-            else load_examples(self.build_backend)
+            else load_examples(self.build_backend, backend=self.backend)
         )
         if not pool:
             raise ValueError("no prompt examples available")
@@ -365,11 +471,17 @@ class PromptBuilder:
 
     def _problem_statement(self) -> str:
         """Return the English problem-statement block."""
+        intro = (
+            "Implement the operator defined by the reference PyTorch model "
+            "below as\na pyasc kernel (the CANN Python DSL) on the target NPU."
+            if self.backend is Backend.PYASC
+            else "Implement the operator defined by the reference PyTorch "
+            "model below as an\nAscend C kernel on the target NPU."
+        )
         return f"""\
 ## Problem Statement
 
-Implement the operator defined by the reference PyTorch model below as an
-Ascend C kernel on the target NPU.
+{intro}
 
 ```python
 {self.task.task_py}
@@ -378,7 +490,7 @@ Ascend C kernel on the target NPU.
 
     def _arch_label(self) -> str:
         """Return the arch field label for this build path."""
-        if self.build_backend is BuildBackend.DEEPJIT:
+        if self.backend is Backend.PYASC or self.build_backend is BuildBackend.DEEPJIT:
             return "target arch"
         return "CMake arch"
 
@@ -400,10 +512,18 @@ Ascend C kernel on the target NPU.
 - HBM: {hw.hbm_gb} GB, bandwidth ~{hw.memory_bandwidth_gbps} GB/s
 - Supported dtypes: {dtypes}
 
-### Ascend C API style (mandatory)
-
-{hw.api_style}
+{self._api_style_block()}
 """
+
+    def _api_style_block(self) -> str:
+        """Return the API-style note for this backend."""
+        if self.backend is Backend.PYASC:
+            return (
+                "### pyasc API style (mandatory)\n\n"
+                "Use the pyasc Python DSL (import name asc) as shown in the "
+                "example. Do not emit Ascend C, CMake, or C++ sources."
+            )
+        return f"### Ascend C API style (mandatory)\n\n{self.hardware.api_style}"
 
     def _examples_block(self, examples: list[PromptExample]) -> str:
         """Render verified example pairs as prompt markdown."""
@@ -413,7 +533,7 @@ Ascend C kernel on the target NPU.
                 f"### Example task: {example.name}\n\n"
                 f"Reference Model:\n\n```python\n{example.task_py}\n```\n\n"
                 f"Expected answer:\n\n"
-                f"```custom_op.asc\n{example.custom_op_asc}\n```\n\n"
+                f"```{example.kernel_tag}\n{example.kernel_src}\n```\n\n"
                 f"```model_new.py\n{example.model_new_py}\n```\n"
             )
         return "\n".join(parts)
@@ -424,27 +544,25 @@ def build_prompt(
     hardware: HardwareProfile,
     *,
     mode: str = "one_shot",
+    backend: Backend | str = DEFAULT_BACKEND,
     build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
     examples: list[PromptExample] | None = None,
 ) -> str:
-    """Assemble the full generation prompt for one task.
-
-    Args:
-        build_backend: Build path whose wording and example pool are used.
-
-    Raises:
-        ValueError: If mode or build backend is unknown, or examples are
-            missing.
-    """
+    """Assemble the generation prompt for one task and backend pair."""
     return PromptBuilder(
-        task, hardware, build_backend=build_backend, examples=examples
+        task, hardware, backend=backend, build_backend=build_backend, examples=examples
     ).build(mode)
 
 
 def system_prompt(
     build_backend: BuildBackend | str = DEFAULT_BUILD_BACKEND,
+    *,
+    backend: Backend | str = DEFAULT_BACKEND,
 ) -> str:
-    """Return the system message for one build path."""
-    if parse_build_backend(build_backend) is BuildBackend.DEEPJIT:
+    """Return the system message for one authoring and build path."""
+    resolved, build = validate_backend_build(backend, build_backend)
+    if resolved is Backend.PYASC:
+        return PYASC_SYSTEM_PROMPT
+    if build is BuildBackend.DEEPJIT:
         return DEEPJIT_SYSTEM_PROMPT
     return SYSTEM_PROMPT

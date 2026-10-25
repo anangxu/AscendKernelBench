@@ -36,7 +36,7 @@ python scripts/generate.py \
 
 Keep the manifest stable. Changing it breaks comparability with earlier runs.
 
-The command processes tasks and samples sequentially. Sample IDs start at zero for each task. There is no CLI option for parallel generation or automatic resume.
+The command processes tasks and samples sequentially. Sample IDs start at zero for each task. Repeating a run name resumes missing samples and skips complete ones; omitted options inherit the run record. Conflicting settings and partial artifact overwrites are refused. There is no parallel-generation flag.
 
 Generation requests structured output first and falls back to a plain completion if that request fails; the fallback decodes a bare JSON object first and otherwise extracts fenced code blocks. The client checks for basic source markers and can retry an invalid generation once. These retries address response generation or formatting; they do not use compiler or correctness feedback to repair the operator.
 
@@ -76,7 +76,7 @@ scp -r runs/activations-10 \
 
 Replace the host and path with your own. Copy any custom evaluation or hardware YAML files separately and preserve their contents. Record the repository revision and environment versions alongside the run: `generation_config.yaml` captures generation settings and task IDs, but not a complete environment or evaluation configuration snapshot.
 
-A newly generated run consists of portable source and text files. Native `custom_op*.so` files and CMake build directories from a previous evaluation are machine-specific; use a source-only copy when moving an evaluated run to another environment so the destination can build it afresh.
+A newly generated run consists of portable source and text files. Native libraries, CMake build directories, DeepJIT artifacts, and pyasc JIT caches from a previous evaluation are machine-specific; use a source-only copy when moving an evaluated run to another environment so the destination can build it afresh.
 
 ## Evaluate on the target NPU
 

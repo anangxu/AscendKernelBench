@@ -1,8 +1,14 @@
-"""AST-level semantic checks for model_new.py."""
+"""AST-level semantic checks for the model_new.py wrapper.
+
+The wrapper's compute must reach exactly one allowed sink: the
+evaluator-loaded torch.ops.custom_op operator for Ascend C, or the
+sample's own kernel launcher for pyasc. Sink accepts both shapes.
+"""
 
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 
 from .rules import TENSOR_COMPUTE_METHODS
 
@@ -123,7 +129,16 @@ _SCALAR_BUILTINS = {
 }
 # These builtins are scalar only when every argument is scalar.
 _SCALAR_IF_ARGUMENTS_ARE_SCALAR = {"round", "abs", "min", "max", "sum"}
-_SCALAR_METHODS = {"numel", "nelement", "dim", "size", "item", "__len__"}
+_SCALAR_METHODS = {
+    "numel",
+    "nelement",
+    "dim",
+    "size",
+    "item",
+    "element_size",
+    "bit_length",
+    "__len__",
+}
 _ARITH_OPS = (
     ast.Add,
     ast.Sub,
@@ -135,32 +150,279 @@ _ARITH_OPS = (
 )
 
 
+@dataclass(frozen=True)
+class Sink:
+    """The one callable the wrapper is allowed to route compute through.
+
+    attr_mode names the modules whose attributes may be the sink, so
+    import kernel followed by kernel.run() is a sink call. direct names
+    the callables that are already the sink, so from kernel import run
+    followed by run() is one too. With no Sink the sink is
+    torch.ops.custom_op, which keeps the Ascend C behaviour unchanged.
+    """
+
+    direct: frozenset[str] = frozenset()
+    attr_mode: frozenset[str] = frozenset()
+    kind: str = "custom_op"
+    attrs: frozenset[str] = frozenset()
+
+    def matches(self, path: str) -> bool:
+        """Return True when a dotted path names the sink itself."""
+        if path.startswith("self."):
+            path = path[5:]
+        if path in self.direct:
+            return True
+        if any(path.startswith(module + ".") for module in self.attr_mode):
+            return True
+        # Import aliases resolve a launcher to either its bare name or the
+        # kernel.name path; both name the same callable.
+        return "." in path and path.rsplit(".", 1)[-1] in self.direct
+
+    def is_sink_module(self, name: str) -> bool:
+        """Return True when name is a module that carries the sink."""
+        return name in self.attr_mode
+
+    def message(self) -> str:
+        """Return the violation for a wrapper that never calls the sink."""
+        if self.kind == "kernel":
+            return (
+                "never calls the kernel launcher — model_new.py must import "
+                "kernel and call its launch function"
+            )
+        return (
+            "never calls torch.ops.custom_op — the wrapper must call the "
+            "evaluator-loaded Ascend C operator"
+        )
+
+    def unknown_message(self, path: str) -> str:
+        """Return the violation for an unknown sink module attribute."""
+        if self.kind == "kernel":
+            return (
+                f"kernel.{path.rsplit('.', 1)[-1]} is not a launcher that "
+                "reaches an @asc.jit kernel in kernel.py — call the kernel "
+                "launcher the sample defines"
+            )
+        return f"vendor op-plugin call: {path}()"
+
+    def kernel_attr_message(self, path: str) -> str | None:
+        """Return the violation for a kernel attribute that is not a launcher.
+
+        Returns None unless this sink is a kernel module whose launcher
+        set is known, so the check never guesses.
+        """
+        if self.kind != "kernel" or "." not in path:
+            return None
+        head, _, tail = path.partition(".")
+        if head in self.attr_mode and tail not in self.attrs:
+            return self.unknown_message(path)
+        return None
+
+
 ################################ AST VISITOR #################################
 class WrapperSemantics(ast.NodeVisitor):
     """AST checks for model_new.py."""
 
-    def __init__(self, source: str) -> None:
-        """Parse source and populate violations."""
+    def __init__(
+        self,
+        source: str,
+        sink: Sink | None = None,
+        require_sink: bool = True,
+        scalar_arith: bool = True,
+        module_scalars: set[str] | None = None,
+        parameter_scalars: dict[str, set[str]] | None = None,
+        scalar_functions: set[str] | None = None,
+    ) -> None:
+        """Parse source and populate violations.
+
+        Args:
+            source: model_new.py text.
+            sink: Allowed compute sink; None means torch.ops.custom_op.
+            require_sink: Whether the source must call its compute sink. Host
+                helpers that only compute shapes may set this False.
+            scalar_arith: Whether to apply the heuristic arithmetic and
+                comparison rules. They need type inference, so host helpers
+                checked in isolation disable them; the definitive rules
+                (torch calls, dynamic execution, caching) always apply.
+            module_scalars: Proven scalar constants visible to this scope.
+            parameter_scalars: Parameters proven scalar by every caller.
+            scalar_functions: Functions whose return values are proven scalar.
+        """
         self.violations: list[str] = []
         self.aliases: dict[str, str] = {}
+        self.sink = sink
         self.co_refs: set[str] = set()
+        self.sink_refs: set[str] = set()
         self.holders: set[str] = set()
         self.scalar_refs: set[str] = set()
         self.tensor_refs: set[str] = set()
         self.calls_custom_op = False
+        self.calls_sink = False
+        self.scalar_arith = scalar_arith
+        self.parameter_scalars = parameter_scalars or {}
+        self.scalar_functions = set(scalar_functions or ())
+        self.function_scalars: dict[str, set[str]] = {}
+        self.scalar_returns: set[str] = set()
         tree = ast.parse(source)
         self._collect_aliases(tree)
-        self._collect_forward_params(tree)
+        self.scalar_refs |= set(module_scalars or ())
         self._collect_bindings_to_fixpoint(tree)
+        self._infer_helper_parameters(tree)
         self.visit(tree)
-        if not self.calls_custom_op:
-            self.violations.append(
+        if require_sink and not self._reached_sink():
+            self.violations.append(self._sink_message())
+
+    def _infer_helper_parameters(self, tree: ast.Module) -> None:
+        """Infer helper parameters from every call in this module."""
+        functions = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        helpers = {
+            name
+            for name in functions
+            if name not in {"forward", "__call__", "__init__"}
+        }
+        original_violations = list(self.violations)
+        changed = True
+        while changed:
+            changed = False
+            self.function_scalars = {}
+            self.scalar_returns = set()
+            self.visit(tree)
+            new_returns = self.scalar_returns - self.scalar_functions
+            if new_returns:
+                self.scalar_functions.update(new_returns)
+                changed = True
+            evidence: dict[str, list[set[str]]] = {name: [] for name in helpers}
+            for caller, function in functions.items():
+                known = self.function_scalars.get(caller, set())
+                aliases: dict[str, str] = {}
+                scope = ast.Module(body=function.body, type_ignores=[])
+                for node in _scope_nodes(scope):
+                    if isinstance(node, ast.Assign) and isinstance(
+                        node.value, ast.Name
+                    ):
+                        target_name = aliases.get(node.value.id, node.value.id)
+                        if target_name in helpers:
+                            for target in node.targets:
+                                if isinstance(target, ast.Name):
+                                    aliases[target.id] = target_name
+                for call in _scope_nodes(scope):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    if isinstance(call.func, ast.Name):
+                        name = aliases.get(call.func.id, call.func.id)
+                    elif isinstance(call.func, ast.Attribute):
+                        name = call.func.attr
+                    else:
+                        continue
+                    if name not in helpers:
+                        continue
+                    saved_scalars, saved_tensors = self.scalar_refs, self.tensor_refs
+                    self.scalar_refs, self.tensor_refs = known, set()
+                    bound = bind_call_arguments(call, functions[name])
+                    evidence[name].append(
+                        {
+                            param
+                            for param, value in bound.items()
+                            if value is not None and self._is_scalar(value)
+                        }
+                    )
+                    self.scalar_refs, self.tensor_refs = saved_scalars, saved_tensors
+            for name, sites in evidence.items():
+                if not sites:
+                    continue
+                proven = set.intersection(*sites)
+                old = self.parameter_scalars.get(name, set())
+                if proven - old:
+                    self.parameter_scalars[name] = old | proven
+                    changed = True
+        self.violations = original_violations
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Check each function with its own parameter and local bindings."""
+        fields = (
+            "scalar_refs",
+            "tensor_refs",
+            "aliases",
+            "co_refs",
+            "sink_refs",
+            "holders",
+        )
+        saved = {name: getattr(self, name).copy() for name in fields}
+        scope = ast.Module(body=node.body, type_ignores=[])
+        parameters = {
+            arg.arg
+            for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        }
+        if node.args.vararg:
+            parameters.add(node.args.vararg.arg)
+        if node.args.kwarg:
+            parameters.add(node.args.kwarg.arg)
+        locals_ = parameters | {
+            item.id
+            for item in _scope_nodes(scope)
+            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+        }
+        for field in fields:
+            value = getattr(self, field)
+            if isinstance(value, dict):
+                setattr(
+                    self, field, {k: v for k, v in value.items() if k not in locals_}
+                )
+            else:
+                setattr(self, field, value - locals_)
+        trusted = self.parameter_scalars.get(node.name, set())
+        self.scalar_refs |= trusted
+        self.tensor_refs |= parameters - trusted - {"self", "cls"}
+        self._collect_aliases(scope)
+        self._collect_bindings_to_fixpoint(scope)
+        self.function_scalars[node.name] = self.scalar_refs - self.tensor_refs
+        returns = [item for item in _scope_nodes(scope) if isinstance(item, ast.Return)]
+        if returns and all(
+            item.value is not None and self._is_scalar(item.value) for item in returns
+        ):
+            self.scalar_returns.add(node.name)
+        for statement in node.body:
+            self.visit(statement)
+        attributes = {
+            field: {name for name in getattr(self, field) if name.startswith("self.")}
+            for field in ("scalar_refs", "co_refs", "sink_refs", "holders")
+        }
+        for field, value in saved.items():
+            setattr(self, field, value)
+        for field, names in attributes.items():
+            getattr(self, field).update(names)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def _reached_sink(self) -> bool:
+        """Return True when the wrapper called its allowed sink."""
+        return self.calls_sink if self.sink is not None else self.calls_custom_op
+
+    def _sink_message(self) -> str:
+        """Return the missing-sink violation for the active sink."""
+        return (
+            self.sink.message()
+            if self.sink is not None
+            else (
                 "never calls torch.ops.custom_op — the wrapper must call the "
                 "evaluator-loaded Ascend C operator"
             )
+        )
 
-    def _resolve(self, node: ast.AST) -> str | None:
-        """Return the dotted path for a name or attribute, if resolvable."""
+    def _resolve(self, node: ast.AST, unwrap_subscript: bool = False) -> str | None:
+        """Return the dotted path for a name or attribute, if resolvable.
+
+        Args:
+            node: Expression to resolve.
+            unwrap_subscript: Treat kernel_fn[i](...) as a call of
+                kernel_fn, which is how a pyasc kernel is launched.
+        """
+        if unwrap_subscript:
+            while isinstance(node, ast.Subscript):
+                node = node.value
         if isinstance(node, ast.Name):
             return self.aliases.get(node.id, node.id)
         if isinstance(node, ast.Attribute):
@@ -175,34 +437,31 @@ class WrapperSemantics(ast.NodeVisitor):
         return self._resolve(node) if isinstance(node, ast.Attribute) else None
 
     def _is_custom_op_path(self, path: str) -> bool:
-        """Return True if path is torch.ops.custom_op or an alias."""
+        """Return True if path is the resolved sink, or an alias."""
+        if self.sink is not None:
+            if path in self.sink_refs:
+                return True
+            return self.sink.matches(path)
         if path == "torch.ops.custom_op" or path.startswith("torch.ops.custom_op."):
             return True
         return any(path == ref or path.startswith(ref + ".") for ref in self.co_refs)
 
+    def _unknown_sink_attr(self, path: str) -> str | None:
+        """Return the path when it is an unresolved kernel-module attribute."""
+        if self.sink is None or "." not in path:
+            return None
+        base, _ = path.split(".", 1)
+        if self.sink.is_sink_module(base) and path not in self.sink.direct:
+            return path
+        return None
+
     def _collect_aliases(self, tree: ast.AST) -> None:
         """Record import aliases and flag banned import roots."""
-        for node in ast.walk(tree):
+        for node in _scope_nodes(tree):
             if isinstance(node, ast.Import):
                 self._record_import(node)
             elif isinstance(node, ast.ImportFrom):
                 self._record_import_from(node)
-
-    def _collect_forward_params(self, tree: ast.AST) -> None:
-        """Record forward/__call__ parameters as likely tensor names."""
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if node.name not in {"forward", "__call__"}:
-                continue
-            args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-            for arg in args:
-                if arg.arg != "self":
-                    self.tensor_refs.add(arg.arg)
-            if node.args.vararg:
-                self.tensor_refs.add(node.args.vararg.arg)
-            if node.args.kwarg:
-                self.tensor_refs.add(node.args.kwarg.arg)
 
     def _record_import(self, node: ast.Import) -> None:
         """Bind import names and reject custom_op / banned roots."""
@@ -240,7 +499,7 @@ class WrapperSemantics(ast.NodeVisitor):
 
     def _collect_bindings(self, tree: ast.AST) -> None:
         """Bind scalars, custom-op aliases, and nn-layer holders."""
-        for node in ast.walk(tree):
+        for node in _scope_nodes(tree):
             parts = self._assignment_parts(node)
             if parts is None:
                 continue
@@ -254,14 +513,43 @@ class WrapperSemantics(ast.NodeVisitor):
     def _collect_bindings_to_fixpoint(self, tree: ast.AST) -> None:
         """Repeat binding propagation until no new name is classified."""
         while True:
-            state = (len(self.scalar_refs), len(self.co_refs), len(self.holders))
+            state = (
+                len(self.scalar_refs),
+                len(self.co_refs),
+                len(self.holders),
+                len(self.tensor_refs),
+            )
             self._collect_bindings(tree)
             if state == (
                 len(self.scalar_refs),
                 len(self.co_refs),
                 len(self.holders),
+                len(self.tensor_refs),
             ):
-                return
+                tainted: set[str] = set()
+                for node in _scope_nodes(tree):
+                    parts = self._assignment_parts(node)
+                    if parts is None:
+                        continue
+                    targets, value = parts
+                    if self._is_scalar(value):
+                        continue
+                    for target in targets:
+                        if isinstance(target, (ast.Tuple, ast.List)):
+                            tainted.update(
+                                item.id
+                                for item in ast.walk(target)
+                                if isinstance(item, ast.Name)
+                                and isinstance(item.ctx, ast.Store)
+                            )
+                        elif isinstance(target, (ast.Name, ast.Attribute)):
+                            key = self._ref_key(target)
+                            if key is not None:
+                                tainted.add(key)
+                new_taint = tainted - self.tensor_refs
+                if not new_taint:
+                    return
+                self.tensor_refs.update(new_taint)
 
     def _assignment_parts(self, node: ast.AST) -> tuple[list[ast.AST], ast.AST] | None:
         """Return assignment targets and value, or bind a range loop."""
@@ -274,12 +562,14 @@ class WrapperSemantics(ast.NodeVisitor):
         return None
 
     def _bind_range_target(self, node: ast.For | ast.comprehension) -> None:
-        """Treat for-loop range targets as scalar integers."""
-        if not (
-            isinstance(node.iter, ast.Call)
-            and isinstance(node.iter.func, ast.Name)
-            and node.iter.func.id == "range"
-        ):
+        """Bind a loop target as scalar when its iterable is scalar-only.
+
+        range(...) is the common case, but a loop over a tuple of constants or
+        over a list of scalars is shape arithmetic too. A loop over anything
+        unknown leaves the target unknown, so tensor elements cannot be read
+        out into a scalar name this way.
+        """
+        if not self._is_scalar(node.iter):
             return
         for name_node in ast.walk(node.target):
             if isinstance(name_node, ast.Name):
@@ -307,9 +597,12 @@ class WrapperSemantics(ast.NodeVisitor):
             return
         if self._is_scalar(value):
             self.scalar_refs.add(key)
+        if self._is_known_tensor(value):
+            self.tensor_refs.add(key)
         path = self._resolve(value)
         if path and self._is_custom_op_path(path):
             self.co_refs.add(key)
+            self.sink_refs.add(key)
         if self._is_nn_layer_call(value):
             self.holders.add(key)
 
@@ -318,7 +611,7 @@ class WrapperSemantics(ast.NodeVisitor):
         if isinstance(node, ast.Constant):
             return True
         if isinstance(node, ast.Name):
-            return node.id in self.scalar_refs
+            return node.id in self.scalar_refs and node.id not in self.tensor_refs
         if isinstance(node, ast.Attribute):
             return self._is_scalar_attribute(node)
         if isinstance(node, ast.Subscript):
@@ -337,6 +630,20 @@ class WrapperSemantics(ast.NodeVisitor):
             ) and self._is_scalar(node.operand)
         if isinstance(node, (ast.Tuple, ast.List)):
             return all(self._is_scalar(elt) for elt in node.elts)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            return all(
+                self._is_scalar(gen.iter) and self._is_scalar(gen.target)
+                for gen in node.generators
+            ) and self._is_scalar(node.elt)
+        if isinstance(node, ast.DictComp):
+            return (
+                all(
+                    self._is_scalar(gen.iter) and self._is_scalar(gen.target)
+                    for gen in node.generators
+                )
+                and self._is_scalar(node.key)
+                and self._is_scalar(node.value)
+            )
         return False
 
     def _is_scalar_attribute(self, node: ast.Attribute) -> bool:
@@ -351,12 +658,11 @@ class WrapperSemantics(ast.NodeVisitor):
         base = node.value
         if isinstance(base, ast.Attribute) and base.attr in {"shape", "sizes"}:
             return True
-        if (
-            isinstance(base, ast.Call)
-            and isinstance(base.func, ast.Attribute)
-            and base.func.attr == "size"
-        ):
-            return True
+        if isinstance(base, ast.Call):
+            if isinstance(base.func, ast.Attribute) and base.func.attr == "size":
+                return True
+            if isinstance(base.func, ast.Name):
+                return self._is_scalar_call(base)
         return isinstance(base, ast.Name) and base.id in self.scalar_refs
 
     def _is_scalar_call(self, node: ast.Call) -> bool:
@@ -365,8 +671,13 @@ class WrapperSemantics(ast.NodeVisitor):
         if isinstance(func, ast.Name):
             if func.id in _SCALAR_BUILTINS:
                 return True
-            if func.id in _SCALAR_IF_ARGUMENTS_ARE_SCALAR:
-                return not any(self._is_known_tensor(arg) for arg in node.args)
+            if func.id in _SCALAR_IF_ARGUMENTS_ARE_SCALAR | {"range", "tuple", "list"}:
+                return all(self._is_scalar(arg) for arg in node.args) and all(
+                    kw.arg is not None and self._is_scalar(kw.value)
+                    for kw in node.keywords
+                )
+            if func.id in self.scalar_functions:
+                return True
             return False
         if isinstance(func, ast.Attribute):
             if func.attr in _SCALAR_METHODS:
@@ -422,10 +733,16 @@ class WrapperSemantics(ast.NodeVisitor):
         self.violations.append(message)
 
     def visit_Call(self, node: ast.Call) -> None:
-        """Allow torch.ops.custom_op; flag other compute or side effects."""
-        func_path = self._resolve(node.func)
+        """Allow the sink call; flag other compute or side effects."""
+        func_path = self._resolve(node.func, unwrap_subscript=True)
         if func_path and self._is_custom_op_path(func_path):
             self.calls_custom_op = True
+            self.calls_sink = True
+            self.generic_visit(node)
+            return
+        unknown = self._unknown_sink_attr(func_path) if func_path else None
+        if unknown is not None:
+            self._flag(self.sink.unknown_message(unknown))
             self.generic_visit(node)
             return
         flagged = self._flag_dynamic_attribute_call(node)
@@ -439,7 +756,7 @@ class WrapperSemantics(ast.NodeVisitor):
         ):
             self._flag(
                 f"tensor-method compute (.{node.func.attr}(...)) — "
-                "compute must live in the Ascend C kernel"
+                "compute must live in the device kernel"
             )
         self.generic_visit(node)
 
@@ -541,7 +858,7 @@ class WrapperSemantics(ast.NodeVisitor):
                     )
                     return True
                 return False
-            self._flag(f"{func_path}() is not allowed in model_new.py")
+            self._flag(f"{func_path}() is not allowed in the sample")
             return True
         if func_path.startswith(("os.system", "os.popen", "os.exec", "os.spawn")):
             self._flag(f"host process execution: {func_path}()")
@@ -550,32 +867,41 @@ class WrapperSemantics(ast.NodeVisitor):
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
         """Flag tensor arithmetic and @; allow integer shape math."""
+        if not self.scalar_arith:
+            self.generic_visit(node)
+            return
         if isinstance(node.op, ast.MatMult):
-            self._flag("@ (matmul) operator — compute must live in the Ascend C kernel")
+            self._flag("@ (matmul) operator — compute must live in the device kernel")
         elif isinstance(node.op, _ARITH_OPS) and not (
             self._is_scalar(node.left) and self._is_scalar(node.right)
         ):
             self._flag(
                 "arithmetic on non-scalar values — tensor compute "
-                "must live in the Ascend C kernel (integer shape "
+                "must live in the device kernel (integer shape "
                 "arithmetic is fine)"
             )
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         """Flag in-place tensor arithmetic and @=."""
+        if not self.scalar_arith:
+            self.generic_visit(node)
+            return
         if not isinstance(node.op, ast.MatMult):
             if not (self._is_scalar(node.target) and self._is_scalar(node.value)):
                 self._flag(
                     "in-place arithmetic on non-scalar values — tensor compute "
-                    "must live in the Ascend C kernel"
+                    "must live in the device kernel"
                 )
         else:
-            self._flag("@ (matmul) operator — compute must live in the Ascend C kernel")
+            self._flag("@ (matmul) operator — compute must live in the device kernel")
         self.generic_visit(node)
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> None:
         """Flag unary arithmetic on non-scalar (tensor) values."""
+        if not self.scalar_arith:
+            self.generic_visit(node)
+            return
         if isinstance(
             node.op, (ast.UAdd, ast.USub, ast.Invert)
         ) and not self._is_scalar(node.operand):
@@ -587,6 +913,9 @@ class WrapperSemantics(ast.NodeVisitor):
 
     def visit_Compare(self, node: ast.Compare) -> None:
         """Flag tensor comparisons; allow scalar and is None checks."""
+        if not self.scalar_arith:
+            self.generic_visit(node)
+            return
         if any(isinstance(op, (ast.Is, ast.IsNot)) for op in node.ops):
             self.generic_visit(node)
             return
@@ -597,9 +926,171 @@ class WrapperSemantics(ast.NodeVisitor):
         if not none_check and not all(self._is_scalar(o) for o in operands):
             self._flag(
                 "comparison on non-scalar values — tensor comparisons are "
-                "compute and belong in the Ascend C kernel"
+                "compute and belong in the device kernel"
             )
         self.generic_visit(node)
 
 
 ################################ AST VISITOR #################################
+
+
+def bind_call_arguments(
+    call: ast.Call, target: ast.FunctionDef | ast.AsyncFunctionDef
+) -> dict[str, ast.expr | None]:
+    """Bind explicit and default call arguments without trusting annotations."""
+    positional = [*target.args.posonlyargs, *target.args.args]
+    if (
+        isinstance(call.func, ast.Attribute)
+        and positional
+        and positional[0].arg in {"self", "cls"}
+    ):
+        positional = positional[1:]
+    parameters = [*positional, *target.args.kwonlyargs]
+    bound: dict[str, ast.expr | None] = {arg.arg: None for arg in parameters}
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
+        keyword.arg is None for keyword in call.keywords
+    ):
+        return bound
+    defaults = target.args.defaults
+    if defaults:
+        bound.update(
+            zip(
+                [arg.arg for arg in positional[-len(defaults) :]], defaults, strict=True
+            )
+        )
+    bound.update(
+        zip(
+            [arg.arg for arg in target.args.kwonlyargs],
+            target.args.kw_defaults,
+            strict=True,
+        )
+    )
+    assigned: set[str] = set()
+    for param, value in zip(positional, call.args):
+        bound[param.arg] = value
+        assigned.add(param.arg)
+    for keyword in call.keywords:
+        if keyword.arg not in bound:
+            continue
+        if keyword.arg in assigned:
+            return {name: None for name in bound}
+        bound[keyword.arg] = keyword.value
+        assigned.add(keyword.arg)
+    return bound
+
+
+def _scope_nodes(tree: ast.AST):
+    """Walk one lexical scope without entering nested definitions."""
+    pending = list(ast.iter_child_nodes(tree))
+    while pending:
+        node = pending.pop()
+        yield node
+        if not isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            pending.extend(ast.iter_child_nodes(node))
+
+
+def _is_scalar_expr(node: ast.AST, known: set[str]) -> bool:
+    """Return True for literals and arithmetic over already-known scalars."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in known
+    if isinstance(node, ast.UnaryOp):
+        return _is_scalar_expr(node.operand, known)
+    if isinstance(node, ast.BinOp):
+        return _is_scalar_expr(node.left, known) and _is_scalar_expr(node.right, known)
+    # `_GOOD = [0]` is a mutable scalar slot used to remember which variant
+    # worked; a container of tensors never qualifies, so this cannot launder
+    # tensor math.
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_is_scalar_expr(element, known) for element in node.elts)
+    # A dict of scalars is bookkeeping too (`_CALLS = {"n": 0}`); a dict holding
+    # a tensor cannot qualify because its value fails the same test.
+    if isinstance(node, ast.Dict):
+        return all(
+            element is not None and _is_scalar_expr(element, known)
+            for element in node.values
+        )
+    return False
+
+
+def _touches_torch(node: ast.AST) -> bool:
+    """Return True when a body mentions torch or NumPy."""
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name) and inner.id in {
+            "torch",
+            "torch_npu",
+            "numpy",
+            "np",
+        }:
+            return True
+        if isinstance(inner, ast.Attribute):
+            root: ast.AST = inner
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id in {
+                "torch",
+                "torch_npu",
+                "numpy",
+                "np",
+            }:
+                return True
+    return False
+
+
+def _collect_module_scalars(
+    tree: ast.Module, include_functions: bool = True
+) -> set[str]:
+    """Return module-level names a host function may treat as plain values.
+
+    Constants and torch-free helpers are defined beside the launcher, but a
+    launcher is checked in isolation, where they would look like unknown
+    non-scalars and make legal host shape arithmetic look like tensor compute.
+    Constant definitions may chain (CHUNK = CORES * BLOCK_LEN), so the pass
+    repeats until it stops resolving new names. A helper or value that mentions
+    torch is excluded, so it cannot launder tensor math.
+    """
+    scalars: set[str] = set()
+    if include_functions:
+        # A wrapper keeps only value constants: a torch-free helper name must
+        # stay unknown so a call to it is still inspected.
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and not _touches_torch(node):
+                scalars.add(node.name)
+    changed = True
+    while changed:
+        changed = False
+        for node in tree.body:
+            value = (
+                node.value
+                if isinstance(node, ast.AnnAssign)
+                else (node.value if isinstance(node, ast.Assign) else None)
+            )
+            if value is None or _touches_torch(value):
+                continue
+            targets = (
+                [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
+            )
+            # `H, W = 128, 256` binds one scalar per element, so both sides are
+            # unpacked instead of the assignment being skipped for its target.
+            if (
+                len(targets) == 1
+                and isinstance(targets[0], (ast.Tuple, ast.List))
+                and isinstance(value, (ast.Tuple, ast.List))
+                and len(targets[0].elts) == len(value.elts)
+            ):
+                if all(_is_scalar_expr(elt, scalars) for elt in value.elts):
+                    for element in targets[0].elts:
+                        if isinstance(element, ast.Name) and element.id not in scalars:
+                            scalars.add(element.id)
+                            changed = True
+                continue
+            if not _is_scalar_expr(value, scalars):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in scalars:
+                    scalars.add(target.id)
+                    changed = True
+    return scalars

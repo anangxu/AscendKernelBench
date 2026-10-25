@@ -6,6 +6,7 @@ stages live on SampleEvaluator so shared trial state is explicit.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .backend import Backend, kernel_file, parse_backend
 from .build import (
     BuildError,
     LoadError,
@@ -42,7 +44,24 @@ from .deepjit_build import (
     prepare_deepjit_module,
     read_build_facts,
 )
-from .eval_result import compiled_result, eval_protocol_metadata, fail_result
+from .eval_result import (
+    compiled_result,
+    eval_protocol_metadata,
+    fail_result,
+    runtime_failure,
+)
+from .pyasc_runtime import (
+    PyAscError,
+    PyAscJITError,
+    PyAscLoadError,
+    PyAscUnavailableError,
+    configure_platform,
+    import_asc,
+    load_kernel_module,
+    prepare_cache_dir,
+    runtime_facts,
+    time_first_call,
+)
 from .runtime import (
     npu_device_index,
     npu_runtime_metadata,
@@ -56,6 +75,30 @@ from .timing import (
 )
 
 __all__ = ["DeviceEvalRequest", "eval_sample_on_device", "exec_python_source"]
+
+# pyasc's dtype table has no factory for these, so a sample whose inputs or
+# parameters use them cannot be marshalled at all. That is a backend-wide
+# limitation, not a per-operator one, and it is reported as such: the harness
+# never casts the tensor to a supported dtype, because that would measure a
+# different task than the one the reference model defines.
+PYASC_UNSUPPORTED_DTYPES = frozenset({"bfloat16", "bool", "complex64", "complex128"})
+
+
+def _pyasc_failure_kind(exc: BaseException) -> tuple[str, str]:
+    """Return (failure_stage, limitation_scope) for a first-call failure.
+
+    UnsupportedSyntaxError means the traced body used something the codegen
+    rejects, which is attributable to the generated source, so it is reported
+    as a codegen error and never as a backend capability limit. Only a
+    positively identified operator-capability limit would use
+    unsupported_operator/operator, and nothing here infers that from an
+    exception: a backend limit is reported by the dtype pre-check, which can
+    name the missing capability. The class name is read from the wrapped repr
+    because eval_device imports asc only inside the worker.
+    """
+    if "UnsupportedSyntaxError" in repr(exc):
+        return "codegen_error", "code"
+    return "jit", "none"
 
 
 class DeviceEvalRequest(BaseModel):
@@ -82,6 +125,7 @@ class DeviceEvalRequest(BaseModel):
     memory_bandwidth_gbps: float = 0.0
     peak_tflops: float = 0.0
     l2_clear_size: int = 256 * 1024 * 1024
+    backend: str = "ascendc"
 
 
 def exec_python_source(
@@ -117,10 +161,19 @@ class SampleEvaluator:
     def __init__(self, request: DeviceEvalRequest) -> None:
         """Bind the request; runtime objects are filled during run."""
         self.req = request
+        self.backend = parse_backend(request.backend)
+        self.kernel_module: Any = None
         self.sample_path = Path(request.sample_dir)
         self.build_backend = parse_build_backend(request.build_backend)
+        if self.backend is Backend.PYASC and self.build_backend is BuildBackend.DEEPJIT:
+            raise ValueError("build_backend=deepjit requires backend=ascendc")
         self.deepjit = DeepJitConfig.model_validate(request.deepjit)
         self.so_path: Path | None = None
+        # Whether this sample has really compiled. Set by a successful Ascend C
+        # build and by a successful pyasc first call; never inferred from the
+        # backend name, because a pyasc failure before the first call has not
+        # compiled anything.
+        self.compiled = False
         self.torch: Any = None
         self.torch_device: Any = None
         self.dtype: Any = None
@@ -160,8 +213,24 @@ class SampleEvaluator:
         failed = self._load_python_modules()
         if failed is not None:
             return self._with_build_facts(failed)
-        self._prepare_device()
+        # Task-provided init inputs are read here, so a failure must become a
+        # payload: nothing has been measured yet, and the diagnostics recorded
+        # so far have to survive.
+        try:
+            self._prepare_device()
+        except Exception as exc:
+            return self._with_build_facts(
+                fail_result(
+                    compiled=self.compiled,
+                    compilation_error=f"device preparation failed: {exc!r}",
+                    failure_stage="execution",
+                    **runtime_failure(exc, stage="device_preparation"),
+                )
+            )
         failed = self._construct_models()
+        if failed is not None:
+            return self._with_build_facts(failed)
+        failed = self._warm_up_pyasc()
         if failed is not None:
             return self._with_build_facts(failed)
         failed = self._run_correctness_trials()
@@ -180,12 +249,20 @@ class SampleEvaluator:
         return self._compiled(correctness=True)
 
     def _with_build_facts(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Merge the recorded build facts into a failure payload."""
+        """Merge the diagnostics collected so far into a failure payload.
+
+        Everything recorded before the failure survives, and the payload's own
+        fields win: a later failure must not be overwritten by an earlier value,
+        and a recorded diagnostic must not be replaced by an empty one.
+        """
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
-            for key in ("build_mode", "build_seconds"):
-                if key in self.metadata:
-                    metadata.setdefault(key, self.metadata[key])
+            merged = dict(self.metadata)
+            for key, value in metadata.items():
+                if value is None and merged.get(key) is not None:
+                    continue
+                merged[key] = value
+            result["metadata"] = merged
         return result
 
     def _compiled(self, *, correctness: bool) -> dict[str, Any]:
@@ -203,14 +280,20 @@ class SampleEvaluator:
         )
 
     def _build_and_load(self) -> dict[str, Any] | None:
-        """Compile and load the kernel; fail-payload on error.
-
-        The DeepJIT path runs in two steps: the host library is built and
-        loaded first, then the device kernel is compiled. Only the device step
-        sets compiled, because a host library alone proves nothing about the
-        kernel the benchmark measures.
-        """
-        asc_source = (self.sample_path / "custom_op.asc").read_text(encoding="utf-8")
+        """Compile and load the backend's kernel; fail-payload on error."""
+        if self.backend is Backend.PYASC:
+            return self._load_pyasc()
+        try:
+            asc_source = (self.sample_path / "custom_op.asc").read_text(
+                encoding="utf-8"
+            )
+        except OSError as exc:
+            return fail_result(
+                compiled=self.compiled,
+                compilation_error=f"cannot read custom_op.asc: {exc!r}",
+                failure_stage="module_load",
+                **runtime_failure(exc, stage="module_load"),
+            )
         started = time.monotonic()
         deepjit_build = self.build_backend is BuildBackend.DEEPJIT
         self.metadata["build_backend"] = self.build_backend.value
@@ -227,12 +310,15 @@ class SampleEvaluator:
                 deepjit=self.deepjit,
                 soc_version=self.req.soc_version,
             )
+            # The build produced a library: for Ascend C that is the compile
+            # step, and a later load failure still reports compiled=True.
+            self.compiled = not deepjit_build
             load_custom_op(self.so_path, asc_source)
         except (BuildError, OSError) as exc:
             return fail_result(compilation_error=str(exc))
         except LoadError as exc:
             return fail_result(
-                compiled=True,
+                compiled=self.compiled,
                 runtime_error=f"shared library load failed: {exc}",
             )
         finally:
@@ -274,6 +360,121 @@ class SampleEvaluator:
         self.compiled = True
         return None
 
+    def _load_pyasc(self) -> dict[str, Any] | None:
+        """Import asc, isolate the JIT cache, and load kernel.py.
+
+        Importing the module does not compile it: pyasc traces, compiles, and
+        launches on the first subscripted call, so a successful import must
+        never be reported as a successful compile. The JIT cache directory is
+        exported before asc is imported because pyasc reads it at import time.
+        """
+        backend = self.backend.value
+        kernel_path = self.sample_path / kernel_file(Backend.PYASC)
+        if not kernel_path.is_file():
+            return fail_result(
+                compilation_error="sample dir missing kernel.py",
+                failure_stage="module_load",
+                backend=backend,
+            )
+        started = time.monotonic()
+        self.metadata["build_mode"] = "pyasc"
+        try:
+            prepare_cache_dir(self.sample_path)
+            asc = import_asc()
+            self.metadata["pyasc_soc_version"] = configure_platform(
+                asc, npu_device_index(self.req.device)
+            )
+            self.kernel_module = load_kernel_module(self.sample_path, kernel_path)
+        except (PyAscUnavailableError, PyAscLoadError, PyAscError) as exc:
+            return fail_result(
+                compilation_error=str(exc),
+                failure_stage="module_load",
+                backend=backend,
+            )
+        finally:
+            self.metadata["build_seconds"] = round(time.monotonic() - started, 3)
+        return None
+
+    def _warm_up_pyasc(self) -> dict[str, Any] | None:
+        """Run the first pyasc call: trace, compile, and launch.
+
+        Only this call decides whether the sample compiled. Its cost is a
+        compound figure and is reported as first_call_seconds, never as a pure
+        compile time. The models are rebuilt afterwards so the preparation
+        call leaves no RNG or parameter state in the seeded protocol.
+        """
+        if self.backend is not Backend.PYASC:
+            return None
+        backend = self.backend.value
+        seed_torch(self.req.seed)
+        try:
+            raw_inputs = self.get_inputs()
+        except Exception as exc:
+            return fail_result(
+                compilation_error=f"input preparation failed: {exc!r}",
+                failure_stage="execution",
+                backend=backend,
+                **runtime_failure(exc, stage="input_preparation"),
+            )
+        # Reject before anything casts: move_value_to_device turns every
+        # floating tensor into the configured precision, which would hide a
+        # task whose declared dtype pyasc cannot marshal. Nothing is converted
+        # while this is unresolved, so the rejection is genuinely pre-cast.
+        unsupported = self._unsupported_pyasc_dtypes(raw_inputs)
+        if not unsupported:
+            try:
+                inputs = [self._process_input(item) for item in raw_inputs]
+            except Exception as exc:
+                return fail_result(
+                    compilation_error=f"input preparation failed: {exc!r}",
+                    failure_stage="execution",
+                    backend=backend,
+                    **runtime_failure(exc, stage="input_preparation"),
+                )
+            # Backstop on the tensors the kernel is actually handed.
+            unsupported = self._unsupported_pyasc_dtypes(inputs)
+        if unsupported:
+            return fail_result(
+                compilation_error=(
+                    "pyasc cannot marshal these tensor dtypes: "
+                    + ", ".join(unsupported)
+                ),
+                failure_stage="unsupported_dtype",
+                limitation_scope="backend",
+                unsupported_dtypes=unsupported,
+                backend=backend,
+            )
+        try:
+            seconds, first_out = time_first_call(lambda: self.new_model(*inputs))
+            self.torch.npu.synchronize()
+        except PyAscJITError as exc:
+            stage, scope = _pyasc_failure_kind(exc)
+            return fail_result(
+                compilation_error=str(exc),
+                jit_error=str(exc),
+                failure_stage=stage,
+                limitation_scope=scope,
+                backend=backend,
+            )
+        except Exception as exc:
+            return fail_result(
+                compilation_error=f"pyasc first call failed: {exc!r}",
+                failure_stage="execution",
+                backend=backend,
+                **runtime_failure(exc, stage="first_call"),
+            )
+        self.compiled = True
+        self.metadata["first_call_seconds"] = round(seconds, 3)
+        # Diagnostic only: a first call can succeed and still produce wrong
+        # output, which the compiled flag cannot express. Never fails a sample.
+        self._record_first_call_correctness(first_out, inputs, raw_inputs)
+        self.metadata.update(runtime_facts(self.sample_path))
+        # Rebuild so the warm-up call cannot influence measured behaviour.
+        self.new_model = None
+        self.ref_model = None
+        self.ref_model_cpu = None
+        return self._construct_models()
+
     def _load_python_modules(self) -> dict[str, Any] | None:
         """Exec the task and model_new.py; fail-payload on error."""
         try:
@@ -291,7 +492,7 @@ class SampleEvaluator:
             self.model_new_cls = custom_globals["ModelNew"]
         except Exception as exc:
             return fail_result(
-                compiled=True, runtime_error=f"module load failed: {exc!r}"
+                compiled=self.compiled, runtime_error=f"module load failed: {exc!r}"
             )
         task_tolerance = self.ref_globals.get("TOLERANCE")
         self.atol, self.rtol = resolve_tolerances(
@@ -319,8 +520,10 @@ class SampleEvaluator:
             self.new_model.eval()
         except Exception as exc:
             return fail_result(
-                compiled=True,
+                compiled=self.compiled,
                 runtime_error=f"candidate model init failed: {exc!r}",
+                failure_stage="execution",
+                **runtime_failure(exc, stage="model_init"),
             )
         try:
             seed_torch(self.req.seed)
@@ -395,7 +598,16 @@ class SampleEvaluator:
     def _run_hidden_distributions(self) -> dict[str, Any] | None:
         """Gate on four value transforms; timing keeps the original draw."""
         seed_torch(self.req.seed)
-        raw_inputs = self.get_inputs()
+        try:
+            raw_inputs = self.get_inputs()
+        except Exception as exc:
+            # The gate cannot run at all. Fail it, and keep the correctness
+            # verdict and the diagnostics already recorded.
+            self.metadata["hidden_passed"] = []
+            self.metadata["runtime_error"] = f"hidden inputs: {exc!r}"
+            self.metadata["failure_stage"] = "execution"
+            self.metadata.update(runtime_failure(exc, stage="hidden_inputs"))
+            return self._compiled(correctness=False)
         passed: list[str] = []
         with self.torch.no_grad():
             for name, scale in HIDDEN_DISTRIBUTIONS:
@@ -417,14 +629,23 @@ class SampleEvaluator:
         raw_inputs: Sequence[Any],
     ) -> dict[str, Any] | None:
         """Return an error mapping when one hidden transform fails."""
-        raw = perturb_floating_inputs(raw_inputs, scale)
-        inputs = [self._process_input(item) for item in raw]
+        try:
+            raw = perturb_floating_inputs(raw_inputs, scale)
+            inputs = [self._process_input(item) for item in raw]
+        except Exception as exc:
+            return {
+                "runtime_error": f"hidden {name}: input preparation failed: {exc!r}",
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_inputs"),
+            }
         self.torch.npu.synchronize(device=self.req.device)
         try:
             ref_out = self._run_reference(inputs, raw, 0, stage=f"hidden {name}")
         except Exception as exc:
             return {
-                "runtime_error": (f"hidden {name}: reference runtime error: {exc!r}")
+                "runtime_error": (f"hidden {name}: reference runtime error: {exc!r}"),
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_reference"),
             }
         ref_snapshot = snapshot_inputs(inputs)
         try:
@@ -432,7 +653,9 @@ class SampleEvaluator:
             self.torch.npu.synchronize(device=self.req.device)
         except Exception as exc:
             return {
-                "runtime_error": (f"hidden {name}: candidate runtime error: {exc!r}")
+                "runtime_error": (f"hidden {name}: candidate runtime error: {exc!r}"),
+                "failure_stage": "execution",
+                **runtime_failure(exc, stage="hidden_candidate"),
             }
         if inputs_were_mutated(inputs, ref_snapshot):
             return {"runtime_error": f"hidden {name}: candidate mutated its inputs"}
@@ -464,6 +687,8 @@ class SampleEvaluator:
             return fail_result(
                 compiled=True,
                 runtime_error=(f"trial {trial}: candidate runtime error: {exc!r}"),
+                failure_stage="execution",
+                **runtime_failure(exc, stage="candidate_trial"),
             )
         if inputs_were_mutated(inputs, ref_snapshot):
             return fail_result(
@@ -481,6 +706,36 @@ class SampleEvaluator:
             )
         self.last_new_out = new_out
         return None
+
+    def _record_first_call_correctness(
+        self,
+        first_out: Any,
+        inputs: Sequence[Any],
+        raw_inputs: Sequence[Any],
+    ) -> None:
+        """Record whether the warm-up call's output matched, as a diagnostic.
+
+        The warm-up call already decides whether the sample compiled. This adds
+        the separate question of whether that first output was right, which
+        matters when a backend can lose synchronisation on a first call. It is
+        recorded, never enforced: the scored protocol stays the correctness
+        trials. Any failure here is recorded as a diagnostic error.
+        """
+        if first_out is None:
+            self.metadata["first_call_correct"] = None
+            self.metadata["first_call_check_error"] = "first call returned no output"
+            return
+        try:
+            with self.torch.no_grad():
+                ref_out = self._run_reference(inputs, raw_inputs, 0, stage="first call")
+                self.torch.npu.synchronize(device=self.req.device)
+            self.metadata["first_call_correct"] = self._outputs_ok(ref_out, first_out)
+            self.metadata["first_call_max_difference"] = max_abs_diff(
+                ref_out, first_out
+            )
+        except Exception as exc:
+            self.metadata["first_call_correct"] = None
+            self.metadata["first_call_check_error"] = repr(exc)
 
     ################################# TRIALS #################################
 
@@ -504,26 +759,76 @@ class SampleEvaluator:
             "max_difference": self.max_diff,
             "correctness_passed": self.pass_count,
             "shared_library": str(self.so_path),
+            "backend": self.backend.value,
+            "timing_method": (
+                "synchronized_wall" if self.backend is Backend.PYASC else "npu_event"
+            ),
+            "timing_scope": (
+                "end_to_end" if self.backend is Backend.PYASC else "device"
+            ),
             **npu_runtime_metadata(self.req.device),
         }
         if self.ref_npu_error:
             self.metadata["reference_npu_error"] = self.ref_npu_error
 
+    def _unsupported_pyasc_dtypes(self, inputs: Sequence[Any]) -> list[str]:
+        """Return dtypes pyasc cannot marshal, across inputs and parameters."""
+        found: list[str] = []
+
+        def consider(value: Any) -> None:
+            dtype = getattr(value, "dtype", None)
+            if dtype is None:
+                return
+            name = str(dtype).replace("torch.", "")
+            if name in PYASC_UNSUPPORTED_DTYPES and name not in found:
+                found.append(name)
+
+        for value in inputs:
+            consider(value)
+        if self.new_model is not None:
+            with contextlib.suppress(Exception):
+                for parameter in self.new_model.parameters():
+                    consider(parameter)
+        return found
+
     ################################# TIMING #################################
+    def _discard_timing(self, reason: str) -> None:
+        """Drop all performance fields while preserving correctness results."""
+        self.metadata["timing_valid"] = False
+        self.metadata["timing_invalid_reason"] = reason
+        self.runtime = None
+        self.runtime_stats = None
+        self.ref_runtime = None
+        self.ref_runtime_stats = None
+        self.metadata.pop("speedup", None)
+        self.metadata["excessive_speedup"] = False
+        for key in ("sol_score", "sol_bound_ms", "sol_bound_kind", "bytes_moved"):
+            self.metadata.pop(key, None)
+
     def _time_both_models(self) -> None:
         """Time candidate and NPU reference; attach speedup and SOL metadata."""
 
         def draw_inputs() -> list[Any]:
             return [self._process_input(item) for item in self.get_inputs()]
 
-        timer = AdaptiveInputTimer(
-            draw_inputs,
-            seed=self.req.seed,
-            num_warmup=self.req.num_warmup,
-            num_trials=self.req.num_perf_trials,
-            device=self.torch_device,
-            l2_clear_size=self.req.l2_clear_size,
-        )
+        try:
+            timer = AdaptiveInputTimer(
+                draw_inputs,
+                seed=self.req.seed,
+                num_warmup=self.req.num_warmup,
+                num_trials=self.req.num_perf_trials,
+                device=self.torch_device,
+                l2_clear_size=self.req.l2_clear_size,
+                timing_method=(
+                    "synchronized_wall"
+                    if self.backend is Backend.PYASC
+                    else "npu_event"
+                ),
+            )
+        except Exception as exc:
+            self._discard_timing(f"timing input preparation failed: {exc!r}")
+            self.metadata.update(runtime_failure(exc, stage="timing_inputs"))
+            return
         self.metadata["timing_fresh_inputs"] = bool(timer.fresh_per_trial)
 
         try:
@@ -557,8 +862,13 @@ class SampleEvaluator:
                     float(self.req.peak_tflops) if self.req.peak_tflops else None
                 ),
             )
+            self.metadata["timing_valid"] = True
         except Exception as exc:
+            # A partially measured timing is not a timing: discard whatever
+            # was collected so no threshold, mean or SOL score can use it.
             self.metadata["runtime_error"] = f"timing failed: {exc!r}"
+            self.metadata.update(runtime_failure(exc, stage="timing"))
+            self._discard_timing(f"timing failed: {exc!r}")
 
     ################################# TIMING #################################
 
@@ -586,6 +896,7 @@ class SampleEvaluator:
                 return self.metadata
         except Exception as exc:
             self.metadata["runtime_error"] = f"post-timing re-check failed: {exc!r}"
+            self.metadata.update(runtime_failure(exc, stage="post_timing_recheck"))
             return self.metadata
         return None
 

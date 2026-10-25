@@ -40,6 +40,7 @@ from src.llm import AscendCGeneration, GenerationResult  # noqa: E402
 TASK = "level1/88_MinGPTNewGelu"
 RUN = "chain_run"
 RECORDED = {
+    "backend": "ascendc",
     "model": "record-model",
     "prompt_mode": "few_shot",
     "temperature": 0.3,

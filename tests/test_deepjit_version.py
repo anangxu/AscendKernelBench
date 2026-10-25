@@ -29,7 +29,7 @@ from src.deepjit_build import (  # noqa: E402
 
 # A host may need an explicit binary, as when a launcher shim refuses to run
 # before its licence is accepted; the device and CI just use git on PATH.
-GIT = os.environ.get("AKB_TEST_GIT") or shutil.which("git") or "git"
+GIT = os.environ.get("ASCEND_KERNEL_BENCH_TEST_GIT") or shutil.which("git") or "git"
 
 SOURCE = (
     '#include "kernel_operator.h"\n'

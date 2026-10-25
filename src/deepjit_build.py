@@ -10,6 +10,8 @@ candidate never runs a build command.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -17,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sysconfig
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +27,7 @@ from pathlib import Path
 from loguru import logger
 
 from .config import DeepJitConfig
+from .io_util import write_text_atomic
 
 # The DeepJIT commit this path was verified against (Ascend 910B4, CANN
 # 9.1.0, torch 2.10.0). A checkout at another commit is reported, not trusted.
@@ -32,18 +36,18 @@ _COMMIT_RE = re.compile(r"[0-9a-f]{40,64}")
 
 # Generated layout inside the sample directory.
 DEEPJIT_DIR_NAME = "deepjit"
-DEEPJIT_KERNEL_DIR_NAME = "akb_deepjit_kernel"
+DEEPJIT_KERNEL_DIR_NAME = "ascend_kernel_bench_deepjit_kernel"
 DEEPJIT_KERNEL_PREFIX = DEEPJIT_KERNEL_DIR_NAME + "/"
-DEEPJIT_RUNTIME_HEADER_NAME = "akb_deepjit_runtime.hpp"
-DEEPJIT_LAUNCHER_NAME = "akb_deepjit_launcher.cpp"
-DEEPJIT_DECLS_NAME = "akb_deepjit_launch_decls.h"
+DEEPJIT_RUNTIME_HEADER_NAME = "ascend_kernel_bench_deepjit_runtime.hpp"
+DEEPJIT_LAUNCHER_NAME = "ascend_kernel_bench_deepjit_launcher.cpp"
+DEEPJIT_DECLS_NAME = "ascend_kernel_bench_deepjit_launch_decls.h"
 DEEPJIT_HOST_NAME = "custom_op_host.cpp"
 DEEPJIT_CACHE_DIR_NAME = "cache"
 DEEPJIT_FACTS_NAME = "build_facts.json"
-DEEPJIT_ENV_PREFIX = "AKB_DEEPJIT"
-DEEPJIT_PREPARE_ENTRY = "akb_deepjit_prepare"
+DEEPJIT_ENV_PREFIX = "ASCEND_KERNEL_BENCH_DEEPJIT"
+DEEPJIT_PREPARE_ENTRY = "ascend_kernel_bench_deepjit_prepare"
 DEEPJIT_ERROR_BUFFER_SIZE = 8192
-DEEPJIT_EXTENSION_NAME = "akb_deepjit_host"
+DEEPJIT_EXTENSION_NAME = "ascend_kernel_bench_deepjit_host"
 
 # DeepJIT passes compiler, include, and flag strings through a shell command,
 # so every path it sees must stay free of whitespace and shell metacharacters.
@@ -78,6 +82,7 @@ class DeepJitPaths:
     build_dir: Path
     kernel_source: Path
     signature: str
+    dependency_hash: str = ""
 
 
 def resolve_deepjit_settings(settings: DeepJitConfig) -> DeepJitConfig:
@@ -136,7 +141,7 @@ def _write_if_changed(path: Path, content: str) -> None:
     """
     if path.is_file() and path.read_text(encoding="utf-8") == content:
         return
-    path.write_text(content, encoding="utf-8")
+    write_text_atomic(path, content)
 
 
 _UNSAFE_ARGUMENT_RE = re.compile(r"""[\s;|&$`<>()"'\\]""")
@@ -359,7 +364,7 @@ def _runtime_header(paths: DeepJitPaths, include_dirs: list[str]) -> str:
 #include <acl/acl.h>
 #include <deep_jit/backend/ascend/backend.hpp>
 
-namespace akb_deepjit {{
+namespace ascend_kernel_bench_deepjit {{
 
 inline deep_jit::Runtime<deep_jit::Ascend>& runtime() {{
     static deep_jit::LazyInit<deep_jit::Runtime<deep_jit::Ascend>> jit(nullptr);
@@ -382,7 +387,7 @@ inline void write_error(char* buffer, int size, const char* message) {{
     std::snprintf(buffer, static_cast<size_t>(size), "%s", text);
 }}
 
-}}  // namespace akb_deepjit
+}}  // namespace ascend_kernel_bench_deepjit
 """
 
 
@@ -425,21 +430,21 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             "// message that names the kernel it came from.",
             f"int prepare_kernel{index}(char* error_message, int error_size) {{",
             "    try {",
-            f"        kHandle{index} = akb_deepjit::runtime().compile(",
+            f"        kHandle{index} = ascend_kernel_bench_deepjit::runtime().compile(",
             f"            kKernelName{index}, kKernelSource{index});",
             "        return 0;",
             "    } catch (const std::exception& error) {",
             "        const std::string detail =",
             '            std::string("kernel ") + kKernelName' + str(index),
             '            + ": " + error.what();',
-            "        akb_deepjit::write_error(",
+            "        ascend_kernel_bench_deepjit::write_error(",
             "            error_message, error_size, detail.c_str());",
             "        return 1;",
             "    } catch (...) {",
             "        const std::string detail =",
             '            std::string("kernel ") + kKernelName' + str(index),
             '            + ": unknown C++ exception";',
-            "        akb_deepjit::write_error(",
+            "        ascend_kernel_bench_deepjit::write_error(",
             "            error_message, error_size, detail.c_str());",
             "        return 2;",
             "    }",
@@ -477,7 +482,7 @@ def _launcher_source(units: list[DeviceUnit], kernel_paths: list[Path]) -> str:
             '            " was not prepared; every kernel is prepared '
             'before it runs");',
             "    }",
-            "    akb_deepjit::runtime().launch(",
+            "    ascend_kernel_bench_deepjit::runtime().launch(",
             f"        kHandle{index},",
             "        deep_jit::ascend::LaunchOptions{",
             "            .stream = static_cast<aclrtStream>(stream),",
@@ -568,7 +573,12 @@ def _bisheng_version() -> str:
     return result.stdout.splitlines()[0].strip() if result.stdout else ""
 
 
-def _signature(commit: str, soc_version: str, worktree: str = "clean") -> str:
+def _signature(
+    commit: str,
+    soc_version: str,
+    worktree: str = "clean",
+    dependency_hash: str = "",
+) -> str:
     """Return the dependency signature recorded for one DeepJIT build.
 
     The include parser tracks the kernel source and its includes; the commit,
@@ -576,8 +586,71 @@ def _signature(commit: str, soc_version: str, worktree: str = "clean") -> str:
     folded in here. A dirty checkout gets its own signature so it can never
     reuse artifacts that a clean checkout of the same commit produced.
     """
-    payload = "|".join((commit, worktree, _bisheng_version(), soc_version))
+    payload = "|".join(
+        (commit, worktree, _bisheng_version(), soc_version, dependency_hash)
+    )
     return f"deepjit-{commit[:12]}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+def _dependency_digest(root: Path, settings: DeepJitConfig) -> str:
+    """Hash external headers and build settings outside DeepJIT's parser."""
+    from .build import cann_env
+
+    env = cann_env()
+    roots = [root / "include", *(Path(item) for item in settings.include_dirs)]
+    toolkit = env.get("ASCEND_TOOLKIT_HOME") or env.get("ASCEND_HOME_PATH")
+    if toolkit:
+        roots.extend(
+            path
+            for path in (
+                Path(toolkit) / "include",
+                Path(toolkit) / "aarch64-linux/include",
+            )
+            if path.is_dir()
+        )
+    digest = hashlib.sha256()
+    digest.update(json.dumps(settings.model_dump(), sort_keys=True).encode())
+    visited: set[Path] = set()
+    visited_dirs: set[Path] = set()
+    for directory in roots:
+        resolved = directory.resolve()
+        if not resolved.is_dir():
+            raise DeepJitBuildError(
+                f"dependency include directory is missing: {directory}"
+            )
+        for parent, directories, filenames in os.walk(resolved, followlinks=True):
+            parent_path = Path(parent)
+            real_parent = parent_path.resolve()
+            if real_parent in visited_dirs:
+                directories.clear()
+                continue
+            visited_dirs.add(real_parent)
+            directories.sort()
+            for filename in sorted(filenames):
+                path = parent_path / filename
+                target = path.resolve()
+                if target in visited or not path.is_file():
+                    continue
+                visited.add(target)
+                digest.update(str(path).encode())
+                digest.update(b"\0")
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@contextlib.contextmanager
+def _build_guard(work_dir: Path) -> Iterator[None]:
+    """Serialize sample builds and recover Torch locks after a killed worker."""
+    generated = Path(work_dir).resolve() / DEEPJIT_DIR_NAME
+    generated.mkdir(parents=True, exist_ok=True)
+    with (generated / ".build.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            (generated / "build" / "lock").unlink(missing_ok=True)
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _prepare_layout(
@@ -624,6 +697,7 @@ def _prepare_layout(
             "their own signature and the state is recorded",
             root,
         )
+    dependency_hash = _dependency_digest(root, settings)
     effective_commit = found_commit
     if not settings.commit and found_commit != DEEPJIT_VERIFIED_COMMIT:
         logger.warning(
@@ -661,7 +735,8 @@ def _prepare_layout(
         cache_dir=cache_dir,
         build_dir=generated / "build",
         kernel_source=kernel_paths[0],
-        signature=_signature(effective_commit, soc_version, worktree),
+        signature=_signature(effective_commit, soc_version, worktree, dependency_hash),
+        dependency_hash=dependency_hash,
     )
     _write_if_changed(
         generated / DEEPJIT_RUNTIME_HEADER_NAME,
@@ -709,6 +784,7 @@ def build_facts(
         "deepjit_commit": paths.commit,
         "deepjit_verified_commit": DEEPJIT_VERIFIED_COMMIT,
         "deepjit_signature": paths.signature,
+        "deepjit_dependency_sha256": paths.dependency_hash,
         "deepjit_cache_dir": str(paths.cache_dir),
         "deepjit_kernel_source": str(paths.kernel_source),
         "deepjit_kernel_sha256": hashlib.sha256(
@@ -796,7 +872,45 @@ def _extension_link_flags(settings: DeepJitConfig) -> list[str]:
     return flags
 
 
+_ELFUTILS_HEADER_ERROR_RE = re.compile(
+    r"(?:fatal )?error:\s*[<\"']?"
+    r"(?:elfutils/(?:libdwfl|libdw)\.h|(?:libelf|gelf)\.h)[>\"']?"
+    r"(?:\s*:\s*No such file or directory|\s+file not found)",
+    re.IGNORECASE,
+)
+
+
+def _host_build_error(error: Exception) -> str:
+    """Keep compiler output and explain a missing elfutils development header."""
+    detail = str(error)
+    message = f"deepjit host build failed: {detail}"
+    if _ELFUTILS_HEADER_ERROR_RE.search(detail):
+        message = (
+            "DeepJIT requires elfutils development headers (libdw and libelf). "
+            "Install them for the host compiler, or add the absolute include "
+            "directory containing elfutils/libdwfl.h, libelf.h, and gelf.h "
+            "to deepjit.include_dirs or DEEPJIT_INCLUDE_DIRS. Use the parent "
+            "include directory, not include/elfutils. See "
+            "docs/guide/deepjit.md for dependency setup.\n" + message
+        )
+    return message
+
+
 def build_deepjit_op(
+    source: str,
+    work_dir: Path,
+    *,
+    settings: DeepJitConfig,
+    soc_version: str = "",
+) -> tuple[Path, DeepJitPaths]:
+    """Build a sample library under a process-owned exclusive lock."""
+    with _build_guard(work_dir):
+        return _build_deepjit_op_locked(
+            source, work_dir, settings=settings, soc_version=soc_version
+        )
+
+
+def _build_deepjit_op_locked(
     source: str,
     work_dir: Path,
     *,
@@ -858,7 +972,7 @@ def build_deepjit_op(
             verbose=False,
         )
     except Exception as exc:  # torch raises a variety of build errors
-        raise DeepJitBuildError(f"deepjit host build failed: {exc}") from None
+        raise DeepJitBuildError(_host_build_error(exc)) from None
     library = Path(str(built))
     if not library.is_file():
         raise DeepJitBuildError(f"deepjit host build produced no library: {library}")

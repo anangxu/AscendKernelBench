@@ -21,7 +21,7 @@
 |                                                                      |
 |                          AscendKernelBench                           |
 |                                                                      |
-|        [ LLM ]=======>{ Ascend C }=======>{ libcustom_op.so }        |
+|       [ LLM ]=======>{ Ascend C / pyasc }=======>{ Ascend NPU }       |
 |                 fast_p   |   pass@k   |   SOL score                  |
 |                                                                      |
 \======================================================================/
@@ -30,12 +30,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-A reproducible benchmark for **LLM-generated Ascend C kernels** on Huawei
-Ascend NPUs. A language model reads a PyTorch reference `Model` and writes
-two files. The harness builds them into a process-local `libcustom_op.so`,
-loads that library with `torch.ops.load_library`, checks outputs against
-the reference, and times eligible kernels against live `torch_npu` eager
-execution.
+A reproducible benchmark for **LLM-generated Ascend C and pyasc kernels**
+on Huawei Ascend NPUs. A language model reads a PyTorch reference `Model`
+and writes a kernel plus `model_new.py`. The harness builds or JIT-compiles
+the kernel inside an isolated worker, checks outputs against the reference,
+and times eligible candidates against live `torch_npu` eager execution.
 
 [Documentation](docs/index.md) ·
 [Getting started](docs/guide/getting-started.md) ·
@@ -45,26 +44,38 @@ execution.
 ## Why this benchmark
 
 AscendKernelBench is a KernelBench-style *generate, then evaluate* harness
-for Ascend C, not a CUDA-to-NPU score translator.
+for Ascend NPUs.
 
 - **270 vendored KernelBench tasks** in four levels: 100 operators, 100
-  fused operators, 50 networks or subgraphs, and 20 model tasks.
+  fused operators, 50 networks or subgraphs, and 20 model tasks. This is
+  corpus size, not a claim that every task is supported or device-validated.
 - **Process-local operators.** The CMake build compiles `custom_op.asc` into
   `libcustom_op.so` next to the sample. The evaluator loads it inside the
   worker PyTorch process. Nothing is installed into site-packages or the
   global CANN OPP path, so parallel jobs do not lock a shared environment.
 - **Kernels are actually checked.** Static anti-cheat on both files, five
   seeded correctness trials, input-mutation rejection, isolated workers,
-  NPU-event timing with L2 flush, and a post-timing fresh-input re-check.
+  timing with L2 flush, and a post-timing fresh-input re-check.
 - **Honest scores.** `fast_p` and `pass@k` follow KernelBench semantics.
   An optional roofline **SOL score** follows NVIDIA SOL-ExecBench's
   formula, using the hardware-profile bandwidth (not NVIDIA SOLAR). Each
   scored sample records the protocol snapshot and software stack used to
   produce it.
-- **English generation prompts** and a fixed CMake template. The model
-  writes `custom_op.asc` and `model_new.py` only. Ascend C samples may also
-  be built through the optional DeepJIT path
-  (`--build-backend deepjit`, see `docs/guide/deepjit.md`).
+- **Two authoring backends.** Ascend C emits `custom_op.asc` and
+  `model_new.py`; pyasc emits `kernel.py` and `model_new.py`. Each run records
+  one authoring backend and one build configuration.
+
+| Authoring backend | Build path | Timing for candidate and live reference |
+| --- | --- | --- |
+| `ascendc` (default) | `cmake` (default) | NPU events, device scope |
+| `ascendc` | `deepjit` | NPU events, device scope |
+| `pyasc` | pyasc JIT (`build_backend=cmake` is unused) | Synchronized wall clock, end-to-end scope |
+
+`--build-backend deepjit` applies only to Ascend C; `pyasc` plus `deepjit` is
+rejected. See the [DeepJIT guide](docs/guide/deepjit.md) and
+[pyasc guide](docs/guide/pyasc-backend.md). pyasc timing includes host dispatch
+and launch overhead. Compare latency and speedup only within the same timing
+scope; pyasc latency is not device-only latency.
 
 The current workflow supports generation and evaluation scripts. It does
 not implement an automatic compile-error repair agent.
@@ -86,10 +97,10 @@ no SOL score.
 
 ## Quick start
 
-Use Python 3.10 or later. All dependencies live in `requirements.txt`. On an
-Ascend host the recommended experiment environment is the conda env
-**AscendKernelBench** (Python 3.12) with the CANN 9.1.0 pairing
-**PyTorch 2.10.0** + **torch-npu 2.10.0.post6**:
+Use Python 3.10 or later for the harness. Base dependencies live in
+`requirements.txt`; optional backends need their own runtime. The earlier
+Ascend host setup used the conda env **AscendKernelBench** (Python 3.12)
+with CANN 9.1.0, **PyTorch 2.10.0**, and **torch-npu 2.10.0.post6**:
 
 ```bash
 git clone https://github.com/wuzhenqing/AscendKernelBench.git
@@ -110,8 +121,9 @@ source /usr/local/Ascend/cann-9.1.0/set_env.sh
 python -m pip install -r requirements.txt
 ```
 
-These dependencies do **not** include CANN, the NPU driver, or a hardware
-runtime. See [getting started](docs/guide/getting-started.md).
+These dependencies do **not** include CANN, the NPU driver, pyasc, or a
+DeepJIT checkout. Validate each chosen runtime pairing on the target host.
+See [getting started](docs/guide/getting-started.md).
 
 Generate (any machine with network access to your LLM):
 
@@ -167,8 +179,8 @@ python scripts/generate.py \
 Suspicious speedups (`> 10×` by default) stay in `fast_0` and `pass@k`
 but are excluded from positive `fast_p` and the geometric mean. Generation
 failures that never wrote a sample are **absent** from the denominator.
-Compare runs only with matching hardware, CANN, precision, timing
-settings, and harness (`metadata.harness`: model, prompt mode, reasoning
+Compare runs only with matching hardware, CANN, precision, authoring/build
+backends, timing method and scope, timing settings, and harness (`metadata.harness`: model, prompt mode, reasoning
 effort). These scores are **not** comparable to CUDA KernelBench or to
 NVIDIA SOL-ExecBench numbers.
 
@@ -178,12 +190,12 @@ The default protocol is:
 
 - 5 seeded correctness trials, then four hidden value transforms
   (original, ×3, ×0.01, ×−1); all must pass before timing
-- 10 warmups (SOL-ExecBench-style isolation) and 100 retained NPU-event
-  trials (KernelBench-style statistics)
+- 10 warmups (SOL-ExecBench-style isolation) and 100 retained trials
+  (NPU events for Ascend C; synchronized wall clock for pyasc)
 - L2 flush of `max(256 MiB, 2 × profile L2)` before each timed call
 - Isolated worker process group; host kills the group on timeout
-- `torch.library` only: `TORCH_LIBRARY` / `TORCH_LIBRARY_IMPL`, loaded
-  with `torch.ops.load_library`
+- Ascend C uses `TORCH_LIBRARY` / `TORCH_LIBRARY_IMPL`, loaded with
+  `torch.ops.load_library`; pyasc uses `@asc.jit` device kernels
 
 The default hardware profile is `ascend910b2`. `ascend950pr` is reserved
 and must be validated before use.
@@ -195,12 +207,30 @@ KernelBench/                 Vendored reference tasks, level1–level4
 src/                         Generation, build, evaluation, and scoring
 scripts/                     Four user CLIs plus two internal worker scripts
 configs/                     Eval defaults, hardware profiles, task subsets
-build_template/              CMake project that writes libcustom_op.so
+build_template/              Default CMake project for libcustom_op.so
+tests/                       Offline regressions and NPU backend smoke runner
 docs/                        English Markdown guides and references
 requirements.txt             Third-party dependencies for every machine
 ```
 
 ## Development
+
+Run the offline regression suites without an NPU:
+
+```bash
+python tests/run_tests.py
+```
+
+On an Ascend host, validate the three execution paths and save the report:
+
+```bash
+export DEEPJIT_ROOT=/path/to/DeepJIT
+python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+```
+
+Use `--case` to select a case; run the command with `--help` for choices.
+Offline tests cover generation, run identity, checks, dispatch, and build
+recovery; they do not establish device correctness or full-corpus coverage.
 
 Optional when you change Python under `src/` or `scripts/`:
 
@@ -218,3 +248,31 @@ timing and the SOL formula). The roofline bound used here is a
 documented bandwidth estimate, not a SOLAR characterization.
 
 Released under the [MIT License](LICENSE).
+
+## pyasc backend
+
+AscendKernelBench can generate and evaluate two authoring languages. One run
+uses one backend; Ascend C remains the default.
+
+```bash
+python scripts/generate.py \
+  --task level1/19_ReLU \
+  --model <model> \
+  --backend pyasc \
+  --hardware ascend910b2 \
+  --run-name relu_pyasc
+
+python scripts/evaluate.py relu_pyasc
+python scripts/analyze.py relu_pyasc
+```
+
+A pyasc sample delivers `kernel.py` (an `@asc.jit` device kernel plus a host
+launcher) and `model_new.py`, exactly as an Ascend C sample delivers
+`custom_op.asc` and `model_new.py`. The run records its backend in
+`generation_config.yaml`. Evaluation checks recorded backend identity against
+the artifacts and refuses mixed runs.
+
+Install pyasc with the wheel that matches the host CANN pairing
+(`python -m pip install pyasc==1.1.1`); generation and offline analysis do not
+import it. See [docs/guide/pyasc-backend.md](docs/guide/pyasc-backend.md) for
+the contract, the JIT semantics, the static checks, and the timing caveats.

@@ -10,7 +10,7 @@ Evaluation settings live in `configs/eval_default.yaml`. Hardware descriptions l
 
 A custom YAML file **replaces** the default file; the loader does not merge files. Nested mappings such as `tolerances` and `generation` are not recursively merged with the default YAML. Unknown top-level keys are silently ignored, so a misspelled key may appear to work while leaving the default in effect. The loader does not provide comprehensive value/range validation.
 
-Evaluation reads `hardware_file` from an existing run's `generation_config.yaml` first, then the `hardware` field, when present. Other evaluation protocol values always come from `configs/eval_default.yaml`. Generation scripts still accept `--config` and `--hardware`.
+Evaluation reads `hardware_file` from an existing run's `generation_config.yaml` first, then the `hardware` field, when present. Other evaluation protocol values always come from `configs/eval_default.yaml`. Generation scripts still accept `--config` and `--hardware`. Authoring/build backend and DeepJIT settings are restored from the run record for evaluation; protocol defaults are not a backend override.
 
 ## Evaluation settings
 
@@ -54,7 +54,9 @@ A task's nonempty `TOLERANCE` mapping takes precedence over configured tolerance
 | `deepjit.cache_dir` | empty (sample-local `deepjit/cache`) | the `deepjit` build path |
 
 `build_backend` is opt-in per run and applies to Ascend C samples only;
-`cmake` stays the default. A DeepJIT sample runs under the evaluation worker's
+`cmake` stays the default. `generation.backend` selects `ascendc` or `pyasc`;
+`pyasc` with `build_backend=deepjit` is refused. For pyasc, the default `cmake`
+value is unused and the runtime JIT compiles `kernel.py`. A DeepJIT sample runs under the evaluation worker's
 overall budget, `eval_timeout + 2 * build_timeout`; there is no separate
 timeout for the DeepJIT host compilation. See the [DeepJIT guide](../guide/deepjit.md).
 
@@ -66,6 +68,7 @@ These are nested under `generation`:
 
 | Key | Default | Used by |
 | --- | --- | --- |
+| `backend` | `ascendc` | `generate.py`, or `--backend`; `ascendc` or `pyasc` |
 | `model` | `deepseek-flash` | `generate.py` |
 | `temperature` | `0.0` | `generate.py` |
 | `max_tokens` | `131072` | `generate.py`, or `--max-tokens` |
@@ -75,7 +78,7 @@ These are nested under `generation`:
 
 `num_samples` must be a positive integer; `generate.py` exits with a clear error when the resolved value is zero or negative. `reasoning_effort` is sent as a request parameter only when set; an empty or null YAML value is treated as unset for endpoints that reject it. Reasoning tokens count against `max_tokens`.
 
-The model name is passed to your endpoint. Set it to a model your service supports. `zero_shot` omits examples, `one_shot` uses the first bundled example, and `few_shot` uses all bundled examples. The repository currently ships two examples (elementwise add and LeakyReLU).
+The model name is passed to your endpoint. Set it to a model your service supports. `zero_shot` omits examples, `one_shot` uses the first bundled example, and `few_shot` uses all bundled examples. Examples are selected by authoring/build backend: Ascend C CMake, Ascend C DeepJIT, or pyasc. Each pool currently holds two examples.
 
 For example, save the following as `configs/relu-experiment.yaml`:
 
@@ -153,6 +156,9 @@ Pass a custom profile with `--hardware configs/hardware/my-device.yaml`, or save
 | `ASCEND_KERNEL_BENCH_CACHE_DIR` | Override the cache root holding the shared host-TU precompiled header. Defaults to `$XDG_CACHE_HOME/ascend-kernel-bench` or `~/.cache/ascend-kernel-bench`. |
 | `ASCEND_KERNEL_BENCH_DISABLE_PCH` | When set to `1` / `true` / `yes` / `on`, the split build compiles the host glue without the precompiled header. |
 | `ASCEND_SLOG_PRINT_TO_STDOUT` | The build/evaluation code defaults this to `0` in child environments when it is unset, to reduce runtime log output. |
+| `DEEPJIT_ROOT` / `DEEPJIT_COMMIT` / `DEEPJIT_CXX` | Fallbacks for empty DeepJIT root, pinned commit, and host C++ compiler settings. |
+| `PYASC_CACHE_DIR` | Set by the worker before importing `asc` to isolate each sample's JIT cache. |
+| `ASCEND_KERNEL_BENCH_PYASC_BACKEND` | Formal evaluation accepts NPU execution only; simulator selection is refused. |
 | `ASCEND_RT_VISIBLE_DEVICES` | Restrict which physical NPUs the process can see. Evaluation always addresses `npu:0` inside that visible set. |
 
 If the selected CANN environment script exists, the build helper sources it through Bash and caches the resulting environment for that process. If it does not exist, the helper uses the current environment. Source the appropriate CANN script in your shell before running the evaluator so Python imports and worker startup can also use it.

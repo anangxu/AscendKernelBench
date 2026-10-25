@@ -30,9 +30,9 @@ runs/my_run/
 └── pass_at_k_results.json
 ```
 
-This is a representative layout, not a promise that every file exists. `response_raw.txt` is written when a raw response is available. Build artifacts/logs appear only after their stages run. `scripts/evaluate.py` writes both aggregate JSON files.
+This is a representative Ascend C CMake layout, not a promise that every file exists. pyasc uses `kernel.py` and a sample-local JIT cache. DeepJIT uses `custom_op.asc` and stores its generated sources, build logs, cache, and `build_facts.json` under `deepjit/`. `response_raw.txt` is written when a raw response is available. Build artifacts/logs appear only after their stages run. `scripts/evaluate.py` writes both aggregate JSON files.
 
-`generation_config.yaml` records selected generation settings, tasks, and the resolved hardware profile path when one was supplied. It does not record the entire resolved evaluation configuration, driver/CANN versions, repository revision, or device state. Preserve those separately for reproducible comparisons. Using an existing run name can overwrite generated files and configuration; re-evaluation overwrites results.
+`generation_config.yaml` records selected generation settings, tasks, and the resolved hardware profile path when one was supplied. It does not record the entire resolved evaluation configuration, driver/CANN versions, repository revision, or device state. Preserve those separately for reproducible comparisons. Generation resumes an existing run by name, preserves complete samples, and refuses conflicting settings or partial candidate overwrites. Re-evaluation overwrites results. The run records authoring/build backend identity and DeepJIT settings; aggregation rejects mixed backend results.
 
 ## Per-sample result schema
 
@@ -117,9 +117,27 @@ The following is an illustrative schema example, **not a measured result**:
 
 Common diagnostic metadata includes `static_check_error` (a list), `compilation_error`, `runtime_error`, `correctness_error`, and `reference_npu_error`. Built samples also record `build_mode` (`split` for the two-section layout with the shared precompiled header, `legacy` for a single translation unit) and `build_seconds`. A successful correctness path also records a protocol snapshot (hardware, precision, seed, trial counts, warmup, L2 flush size, tolerances, operator mode), the reference mode, and the software stack (`torch_version`, `torch_npu_version`, `device`, and when available `device_name`, `cann_version`, `ascend_home`). Timed NPU-reference samples may also record `bytes_moved`, `sol_bound_ms`, `sol_bound_kind`, and `sol_score`. Early failures do not necessarily contain those contextual fields.
 
+A sample that raised while running carries three classification fields beside `runtime_error`: `runtime_error_class` (the exception class name, for example `OutOfMemoryError`), `runtime_error_stage` (where it was raised: `input_preparation`, `device_preparation`, `module_load`, `first_call`, `model_init`, `hidden_inputs`, `hidden_reference`, `hidden_candidate`, `candidate_trial`, `timing`, `timing_inputs`, or `post_timing_recheck`), and `runtime_error_summary` (the message on one line, bounded). They name the symptom and the step; they never record a verdict on whether the model or the environment caused it, and they do not move a sample out of any rate. `summarize_eval_results` counts them into `runtime_error_classes` and `runtime_error_stages`, and `scripts/analyze.py` prints one row for each, even when both are empty. Samples evaluated before these fields existed count as `unclassified`.
+
 `max_difference` is a limited diagnostic: it is updated for mismatched top-level tensor outputs of equal shape when a numeric difference can be calculated. It is not a complete maximum-error statistic across every output or successful trial. A value of zero does not prove bitwise equality.
 
 `correctness_trials` and `correctness_passed` describe the initial seeded trials. A hidden-distribution failure or a post-timing failure can leave those counts fully passed while setting final `correctness` to `false`. `hidden_failed` is the first failing transform (`d1` through `d4`), or `null` when the gate passed. `harness` copies the generation settings that define the run (model, prompt mode, temperature, reasoning effort, max tokens), so a copied `eval_results.json` still names the model-harness pair that produced it.
+
+### Backend and timing identity
+
+Read `metadata.backend` and `metadata.build_backend` together with the timing
+fields. Ascend C CMake and DeepJIT use `timing_method="npu_event"` and
+`timing_scope="device"`. pyasc uses `timing_method="synchronized_wall"` and
+`timing_scope="end_to_end"` for both the candidate and live reference. pyasc
+latency includes host dispatch, launch, and synchronization overhead. Compare
+latency, speedup, and SOL only within matching timing scopes and environments.
+Older results without these fields require their original protocol record;
+do not infer comparable timing from a backend name alone.
+
+For pyasc, `first_call_seconds` measures trace, compile, and launch together;
+it is not pure compile time. A successful import alone does not set
+`compiled=true`. The optional SOL score remains an estimated-bound diagnostic
+for end-to-end measurements and must not be read as device-only efficiency.
 
 ### Missing timing and partial results
 
@@ -178,9 +196,9 @@ T_sol = bytes_moved / bandwidth
 S = (T_b - T_sol) / ((T_k - T_sol) + (T_b - T_sol))
 ```
 
-`bytes_moved` is the sum of top-level input and last-trial output tensor sizes. It is not a full DRAM-traffic model. When a task declares a positive top-level `FLOPS` or `NUM_FLOPS` constant **and** the hardware profile has `peak_tflops` for the active precision, the bound becomes `max(memory, compute)` and `sol_bound_kind` is `roofline`. The vendored KernelBench corpus does not declare FLOPs, so published scores use the memory term only. `S = 0.5` matches the software baseline; `S` approaches `1` as the kernel approaches the bound. `analyze.py` reports `mean_sol_score` over samples that recorded a score. This is a reporting aid after NVIDIA SOL-ExecBench, not a claim that the machine was characterized with SOLAR. Do not compare these numbers to CUDA SOL-ExecBench leaderboards.
+`bytes_moved` is the sum of top-level input and last-trial output tensor sizes. It is not a full DRAM-traffic model. When a task declares a positive top-level `FLOPS` or `NUM_FLOPS` constant **and** the hardware profile has `peak_tflops` for the active precision, the bound becomes `max(memory, compute)` and `sol_bound_kind` is `roofline`. The vendored KernelBench corpus does not declare FLOPs, so published scores use the memory term only. `S = 0.5` matches the software baseline; `S` approaches `1` as the kernel approaches the bound. `analyze.py` reports `mean_sol_score` over correct samples whose timing was not rejected, the same eligibility the speedup numbers use. This is a reporting aid after NVIDIA SOL-ExecBench, not a claim that the machine was characterized with SOLAR. Do not compare these numbers to CUDA SOL-ExecBench leaderboards.
 
-`summarize_eval_results` also counts `cpu_reference`, `npu_reference`, and `excessive_speedup` samples so a report can show coverage next to `fast_p`.
+`summarize_eval_results` also counts `cpu_reference`, `npu_reference`, and `excessive_speedup` samples so a report can show coverage next to `fast_p`. The same summary carries `runtime_error_classes` and `runtime_error_stages`, the generic classification of runtime failures described above, and the report prints both as `runtime failures (class)` and `runtime failures (stage)`.
 
 ## pass@k
 

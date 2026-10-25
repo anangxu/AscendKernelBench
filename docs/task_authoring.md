@@ -75,7 +75,8 @@ Each generated sample contains the two implementation files used by the build/ev
 | File | Required content |
 | --- | --- |
 | `custom_op.asc` | A two-section Ascend C implementation: device kernels above the `ASCEND_HOST_SECTION` marker, the host launch wrapper and a process-local `TORCH_LIBRARY(custom_op, ...)` / `TORCH_LIBRARY_IMPL(custom_op, PrivateUse1, ...)` binding below it. |
-| `model_new.py` | A `ModelNew` class with constructor and forward signatures matching `Model`, calling `torch.ops.custom_op`. |
+| `kernel.py` | pyasc backend only: one or more `@asc.jit` device kernels plus a plain-Python host launcher. The launcher allocates outputs, launches with `kernel[core_num](...)`, and must not select the platform. |
+| `model_new.py` | A `ModelNew` class with constructor and forward signatures matching `Model`, calling `torch.ops.custom_op` for Ascend C or the checked launcher in `kernel.py` for pyasc. |
 
 The `.asc` source must contain `__global__`, `__vector__`, `TORCH_LIBRARY`, and `TORCH_LIBRARY_IMPL`, plus exactly one `// ==================== ASCEND_HOST_SECTION ====================` separator line. The device section includes only `kernel_operator.h`; the host section includes `torch/library.h`, `ATen/ATen.h`, and the `torch_npu` stream header, and launches each kernel through the generated `<kernel>_launch(numBlocks, (void*)stream, args...)` stub. Follow the bundled [elementwise-add example](https://github.com/wuzhenqing/AscendKernelBench/tree/main/src/prompts/examples/001_elementwise_add) for the kernel class, current NPU stream, launch, and binding structure. The namespace is fixed to `custom_op`; exported entry point names are free, with `run` used by convention. The build system supplies the CMake project and target architecture and writes `libcustom_op.so` into the sample directory. Do not emit pybind11 code or an OPP / `custom_opp` install project; the evaluator loads that `.so` with `torch.ops.load_library`.
 
@@ -98,12 +99,18 @@ For parameterized tasks, `ModelNew.__init__` may construct layers such as `nn.Li
 
 ## Candidate rules and checks
 
-All tensor computation belongs in the Ascend C kernel. The Python wrapper may handle allocation, supported data movement/layout operations, and scalar shape arithmetic. The static checker rejects recognizable forms of:
+All tensor computation belongs in the Ascend C or `@asc.jit` device kernel. The Python wrapper may handle allocation, supported data movement/layout operations, and scalar shape arithmetic. The static checker rejects recognizable forms of:
 
 - PyTorch compute functions, tensor compute methods, tensor arithmetic/comparisons, and calls to constructed neural-network layers.
 - `torch_npu` or vendor operator shortcuts, CPU/NumPy fallbacks, and host-side ATen computation in the `.asc` source.
 - `try`/`except`, `pass`, dynamic Python execution/imports, and known result-caching patterns in the wrapper.
 - Timing event patches, stream manipulation, threading, subprocess execution, and several native host side effects.
+
+For pyasc, checks cover the wrapper, reachable host helpers, and device bodies.
+Scalar annotations supplied by a candidate are not proof of scalar values;
+helper shape arithmetic must be justified at every known call site. A helper
+called with both a shape and a tensor cannot use the shape call to bypass
+tensor-compute checks. See [pyasc](guide/pyasc-backend.md) for the launch contract.
 
 Candidates must not mutate their inputs, and their output must depend on the current input values. Correctness trials check top-level tensor inputs for candidate mutation after reference execution. Timing uses fresh inputs where practical and follows with an additional output check.
 

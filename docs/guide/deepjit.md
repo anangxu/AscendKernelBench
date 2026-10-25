@@ -8,7 +8,8 @@ and compiles the device kernel at prepare time.
 
 `cmake` stays the default. A run records its build backend in
 `generation_config.yaml`, and evaluation reads it from the run, so one run
-keeps one build path.
+keeps one build path. This option applies only to `backend=ascendc`;
+`backend=pyasc` with `build_backend=deepjit` is rejected.
 
 ## Configure
 
@@ -20,7 +21,7 @@ deepjit:
   root: ""                  # DeepJIT checkout holding include/deep_jit
   commit: ""                # optional pin; a mismatch is refused
   cxx: ""                   # host compiler; needs std::format (GCC 13+)
-  include_dirs: []          # extra -I paths for the host extension
+  include_dirs: []          # extra header search directories
   library_dirs: []          # extra -L and -rpath paths
   env: {}                   # environment applied in the worker process
   extra_cflags: []
@@ -46,13 +47,68 @@ Generation records the choice and the DeepJIT settings in the run:
 
 ```bash
 python scripts/generate.py --task level1/19_ReLU --model <model> \
-    --build-backend deepjit --deepjit-root /path/to/DeepJIT \
+    --backend ascendc --build-backend deepjit --deepjit-root /path/to/DeepJIT \
     --deepjit-commit <sha> --run-name relu_deepjit
 ```
 
 `scripts/evaluate.py` takes no build flags: it reads the run record. A run
 with `build_backend=deepjit` on a source without the host-section marker is
 refused, because the DeepJIT path splits and compiles that marker.
+
+
+## Host dependencies
+
+The DeepJIT host extension needs a C++20 compiler with `std::format`
+(such as GCC 13 or newer), the `ninja` executable, the matching CANN and
+PyTorch/torch_npu stack, and elfutils development headers. These are host
+build dependencies; installing the Python requirements alone does not
+provide the compiler, CANN, or elfutils headers.
+
+The verified DeepJIT commit includes `<elfutils/libdwfl.h>` from its
+exception support header. Provide the development headers for both libdw
+and libelf, including `elfutils/libdwfl.h`, `elfutils/libdw.h`, `libelf.h`,
+and `gelf.h`. A runtime-only elfutils installation does not provide these
+headers. They must be visible to the chosen host compiler, including when
+that compiler uses a separate sysroot.
+
+If the headers live outside the compiler's normal search path, point
+`include_dirs` at the directory containing `elfutils/`, not at `elfutils/`
+itself. For example, merge these values into the DeepJIT settings before
+generating the run:
+
+```yaml
+deepjit:
+  root: /path/to/DeepJIT
+  cxx: /path/to/toolchain/bin/g++
+  include_dirs: [/path/to/elfutils/include]
+  library_dirs: [/path/to/elfutils/lib]
+  extra_ldflags: []
+```
+
+Use the actual library directory (`lib`, `lib64`, or an architecture
+subdirectory) for that installation. `include_dirs` adds header search
+paths; `library_dirs` adds both linker `-L` paths and runtime search paths.
+Neither option installs dependencies. `DEEPJIT_INCLUDE_DIRS` and
+`DEEPJIT_LIBRARY_DIRS` provide the same paths when the corresponding lists
+are empty. The run records these settings, so an existing run with explicit
+paths continues to use its recorded values.
+
+The verified commit resolves `dwfl_*` functions with
+`dlopen("libdw.so.1")` and `dlsym`; the host extension already links `-ldl`.
+It does not require default `-ldw` or `-lelf` flags. Leave `extra_ldflags`
+empty unless another dependency or DeepJIT version needs explicit linking.
+For source-level stack traces, make the matching `libdw.so.1` and its
+`libelf.so.1` dependency available to the dynamic loader. With private
+runtime libraries, ensure their transitive dependencies are also reachable
+through the installation's runtime paths or `LD_LIBRARY_PATH`, preserving
+the existing CANN runtime paths. This commit falls back to less detailed
+stack traces when `libdw.so.1` cannot be opened; its compile-time header
+requirement still applies.
+
+A build error naming a missing elfutils header retains the original
+compiler output and adds a hint for `include_dirs`. This is a host dependency
+failure, before device compilation. The harness does not guess the
+compiler's implicit header paths or install packages during evaluation.
 
 ## How one sample is built
 
@@ -61,7 +117,7 @@ refused, because the DeepJIT path splits and compiles that marker.
    `-DDJ_DISABLE_GIL=1` as the DeepJIT integration guide requires for code
    called through `torch.ops`. Nothing is installed globally.
 3. The worker loads it with `torch.ops.load_library`.
-4. The framework prepare entry `akb_deepjit_prepare()` compiles the device
+4. The framework prepare entry `ascend_kernel_bench_deepjit_prepare()` compiles the device
    kernel through DeepJIT. Nothing is launched and no candidate code runs
    before it. Only this step sets `compiled`. The entry is called across a C
    ABI, so it catches every C++ exception and returns a status code plus a
@@ -73,10 +129,10 @@ Files the framework generates under `<sample>/deepjit/`:
 
 | File | Role |
 | --- | --- |
-| `akb_deepjit_kernel/kernel_{i}.hpp` | the device source actually compiled for kernel i |
-| `akb_deepjit_runtime.hpp` | framework runtime: Config, create_lazy_jit, compile, launch |
-| `akb_deepjit_launcher.cpp` | prepare entry plus one launch stub per kernel |
-| `akb_deepjit_launch_decls.h` | declarations force-included into the host TU |
+| `ascend_kernel_bench_deepjit_kernel/kernel_{i}.hpp` | the device source actually compiled for kernel i |
+| `ascend_kernel_bench_deepjit_runtime.hpp` | framework runtime: Config, create_lazy_jit, compile, launch |
+| `ascend_kernel_bench_deepjit_launcher.cpp` | prepare entry plus one launch stub per kernel |
+| `ascend_kernel_bench_deepjit_launch_decls.h` | declarations force-included into the host TU |
 | `custom_op_host.cpp` | the candidate host section with the framework prologue |
 | `build_facts.json` | commit, signature, cache dir, kernel hash (copied to metadata) |
 | `cache/` | DeepJIT artifact cache for this sample |
@@ -97,7 +153,7 @@ wording and example pool:
 
 ```bash
 python scripts/generate.py --task level1/19_ReLU --model <model> \
-    --build-backend deepjit --deepjit-root <checkout> --run-name relu_deepjit
+    --backend ascendc --build-backend deepjit --deepjit-root <checkout> --run-name relu_deepjit
 ```
 
 `build_prompt`, `PromptBuilder`, and `system_prompt` take `build_backend`, so
@@ -159,7 +215,7 @@ Rules:
 * The host section is unchanged and calls one `<kernel>_launch(...)` stub per
   entry, in the order the two kernels must run.
 
-`akb_deepjit_prepare()` prepares every unit in order and returns the status
+`ascend_kernel_bench_deepjit_prepare()` prepares every unit in order and returns the status
 of the first failure with a message that names the kernel, so `compiled` is
 only true when every kernel is ready. A launch stub reads only the handle
 prepare filled and raises an explicit error when it is still empty, so a
@@ -182,32 +238,43 @@ missing. The generated runtime header and host TU therefore include
 `<acl/acl.h>` before any DeepJIT or torch_npu header, and CANN's include
 directories come before torch_npu's. Do not reorder them.
 
-## Cache invalidation
+## Cache invalidation and interrupted builds
 
-Three caches exist and they invalidate on different things:
+The device cache includes a dependency signature; the host extension uses
+ninja dependency tracking:
 
 | Cache | Key | Invalidated by |
 | --- | --- | --- |
 | Device artifact cache (`<sample>/deepjit/cache`) | kernel name plus a hash of the unit source, its tracked includes, the compile options, and the dependency signature | an edit to that unit or to a tracked include it pulls in |
-| `extra_signature` in that key | DeepJIT commit, checkout state, bisheng version, SoC | a DeepJIT update, a dirty checkout, a compiler change, another SoC |
+| `extra_signature` in that key | DeepJIT commit, checkout state, bisheng version, SoC, dependency contents, and build settings | changes to DeepJIT/CANN/extra headers, settings, compiler, or SoC |
 | Host extension build (`<sample>/deepjit/build`) | ninja depfiles over the generated launcher and host sources | a regenerated launcher, declarations, or host source |
 
-Generated files are written only when their content changes, so re-evaluating
+Generated files are written atomically only when their content changes, so re-evaluating
 an unchanged sample leaves both caches warm: the host build becomes a no-op
 and the device cache serves every kernel without invoking bisheng or ld.lld.
-A dirty DeepJIT checkout is recorded as `deepjit_worktree` in the result
-metadata and gets its own signature, so modified headers cannot silently
-reuse artifacts built from the pinned commit.
+The content digest covers DeepJIT includes, CANN includes, extra include
+directories, and resolved DeepJIT settings. It is recorded as
+`deepjit_dependency_sha256`. The `deepjit_worktree` label is also retained;
+changing one dirty checkout into a different dirty state still changes the
+signature when the dependency contents change.
+
+A process-owned file lock serializes work in each sample's DeepJIT build
+directory. While holding that lock, the next builder removes a stale Torch
+build lock left by a killed worker. Re-evaluation after a timeout can therefore
+continue without waiting forever on the abandoned lock. The lock is held
+through the host build; concurrent builders cannot remove an active owner's
+Torch lock.
 
 Compiler flags, environment values, and paths that reach the compiler are
 refused when they contain whitespace or shell metacharacters, because this
 DeepJIT version passes them through a shell command.
 
-## Verified facts
+## Prior contributor device observations
 
-Measured on Ascend 910B4 (20 AI cores, 40 vector cores, 29.5 GiB HBM),
+Reported on Ascend 910B4 (20 AI cores, 40 vector cores, 29.5 GiB HBM),
 CANN 9.1.0, torch 2.10.0 + torch_npu 2.10.0, DeepJIT commit
-`3732a3b9a0a2e5126396908a362ba5abdf043b2f`:
+`3732a3b9a0a2e5126396908a362ba5abdf043b2f`. These observations describe
+that earlier setup, not validation of every later integration or all tasks:
 
 * `ACL_DEV_ATTR_NPU_ARCH` is `2201`, so DeepJIT compiles with
   `bisheng -O2 --npu-arch=dav-2201 --cce-aicore-only` and links with
@@ -221,6 +288,21 @@ CANN 9.1.0, torch 2.10.0 + torch_npu 2.10.0, DeepJIT commit
   whose length is not 32-byte aligned.
 * `ACL_DEV_ATTR_UBUF_PER_VECTOR_CORE` reports `0` on this device. It is
   recorded as a known limit; no value is hardcoded.
+
+## Validate the installed stack
+
+Run offline regressions and then the device smoke suite on the target host:
+
+```bash
+python tests/run_tests.py
+export DEEPJIT_ROOT=/path/to/DeepJIT
+python tests/npu_backend_smoke.py --repeat 2 --output /tmp/backend-smoke.json
+```
+
+The second command sequence needs the Ascend runtime and all selected
+backends. Use repeated `--case` options to select cases; `--help` lists their
+names. Repeats exercise warm builds. Preserve the output with the environment
+and revision used; selected smoke cases do not establish full-corpus coverage.
 
 ## Known limits
 
