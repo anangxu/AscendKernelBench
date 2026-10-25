@@ -1,6 +1,6 @@
 # Architecture
 
-AscendKernelBench is a Python orchestration layer around a vendored task corpus, an OpenAI-compatible generation endpoint, and a fixed CMake build for Ascend C. Generation and analysis can run independently of the Ascend evaluation machine.
+AscendKernelBench is a Python orchestration layer around a vendored task corpus, an OpenAI-compatible generation endpoint, and isolated Ascend C or pyasc execution. Ascend C supports CMake (default) and DeepJIT builds; pyasc uses its own JIT. Generation and analysis can run independently of the Ascend evaluation machine.
 
 ```text
 KernelBench task + hardware profile
@@ -9,7 +9,7 @@ KernelBench task + hardware profile
                   |
          llm.py -> LLM endpoint
                   |
-     custom_op.asc + model_new.py
+     backend kernel artifact + model_new.py
                   |
              runs/{name}/
                   |
@@ -17,9 +17,9 @@ KernelBench task + hardware profile
                   |
           one worker per sample
                   |
-        CMake build -> libcustom_op.so (process-local load)
+       Ascend C (CMake/DeepJIT) or pyasc JIT
                   |
-        correctness -> NPU-event timing
+       correctness -> timing -> fresh-input check
                   |
           per-sample eval_result.json
                   |
@@ -36,15 +36,18 @@ KernelBench task + hardware profile
 | `prompt.py` | Task source, hardware information, examples, and output-contract assembly. |
 | `llm.py` | Endpoint requests, structured/fenced response handling, and basic deliverable validation. |
 | `rundir.py` | Run paths, generated files, per-sample collection, and atomic aggregate writes. |
-| `checker.py` | Stable re-export of static checks. Implementation is `checks/` (regex `PatternRule`s, Python AST visitor, Ascend C rules). |
+| `checker.py` | Stable re-export of static checks. `checks/` implements regex rules, wrapper AST checks, Ascend C checks, and pyasc host/device checks. |
 | `eval.py` | Public host API (`evaluate_run`) and isolated worker spawn. |
-| `eval_device.py` | Worker-side `SampleEvaluator`: build, seeded correctness, NPU-event timing, and SOL attach. |
+| `eval_device.py` | Worker-side `SampleEvaluator`: build/JIT preparation, seeded correctness, timing, and SOL attach. |
 | `process.py` | Shared isolated JSON worker (`IsolatedJsonWorker.for_eval` / `for_baseline`). |
 | `report.py` | Rich progress bars, sample status, and evaluation tables. |
 | `log.py` | loguru setup used by CLIs and workers. |
 | `eval_result.py` | KernelBench-compatible result payloads and protocol-snapshot metadata. |
-| `build.py` and `build_template/` | CMake build of `libcustom_op.so` and `torch.ops.load_library`. |
-| `timing.py` | NPU events, L2 flush sized from the hardware profile, and timing statistics. |
+| `backend.py` | Authoring backend, artifact names, and valid authoring/build combinations. |
+| `build.py` and `build_template/` | Ascend C build dispatch, default CMake build, and library loading. |
+| `deepjit_build.py` | Framework-owned DeepJIT source conversion, preparation, and process-local extension. |
+| `pyasc_runtime.py` | Real-file import, sample-local JIT cache, and NPU first-call preparation. |
+| `timing.py` | NPU-event or synchronized wall-clock timing, L2 flush, and timing statistics. |
 | `compare.py` | Dtype-aware output matching and tensor-byte accounting. |
 | `sol.py` | Roofline bound and SOL-ExecBench-style score. |
 | `runtime.py` | CANN / PyTorch / torch-npu / device identity recorded in result metadata. |
@@ -83,9 +86,9 @@ Evaluation is sequential at the batch-script level, with a new worker for each s
 
 ## Generation boundary
 
-Prompt construction reads task source without executing it. Prompts contain the complete reference file, target hardware information, the selected examples, and a fixed two-file output contract. `zero_shot` omits examples, `one_shot` uses the first example, and `few_shot` uses every available example. The current repository ships two examples (elementwise add, then LeakyReLU). `one_shot` uses the first; `few_shot` uses both.
+Prompt construction reads task source without executing it. Prompts contain the complete reference file, target hardware information, the selected examples, and a fixed two-file output contract. `zero_shot` omits examples, `one_shot` uses the first example, and `few_shot` uses every available example. Each authoring/build backend has a separate two-example pool. `one_shot` uses the first example in that pool; `few_shot` uses both.
 
-The LLM client first attempts a structured response with the `custom_op_asc` and `model_new_py` fields. If that request or parsing fails, it attempts a normal completion, decodes a bare JSON object first, and otherwise extracts two fenced code blocks. The resulting fields pass through the same Pydantic model and marker checks. Generation can retry once after an invalid/failed attempt. Endpoint fallback and retries can therefore issue more than one request for a sample.
+The LLM client first attempts a structured response with `custom_op_asc` (Ascend C) or `kernel_py` (pyasc), plus `model_new_py`. If that request or parsing fails, it attempts a normal completion, decodes a bare JSON object first, and otherwise extracts two fenced code blocks. The resulting fields pass through the same Pydantic model and marker checks. Generation can retry once after an invalid/failed attempt. Endpoint fallback and retries can therefore issue more than one request for a sample.
 
 These checks establish that response fields resemble the expected files; they do not establish compilability or correctness. Full static checking happens at evaluation. Raw responses, when available, are persisted next to the generated files.
 
@@ -95,11 +98,11 @@ The host (`evaluate_run` → `eval_sample`) reads sample source and runs static 
 
 NPU imports live inside worker/timing functions so source inspection and host-side utilities do not initialize an NPU runtime. The worker loads generated code, compiles native code, and uses the selected NPU. Its process is separate but has the invoking user's privileges; this is not a security sandbox.
 
-Build configuration is controlled by the repository template. The generated `.asc` file supplies kernel logic, host launch wrappers, and a `TORCH_LIBRARY` / `TORCH_LIBRARY_IMPL` binding. The template builds a **process-local** `libcustom_op.so` with RPATH to Torch, `torch_npu`, and CANN libraries. It does not run `cmake --install`, does not produce a `custom_opp_*.run` package, and does not write into site-packages or `$ASCEND_OPP_PATH/vendors`. The worker loads that `.so` with `torch.ops.load_library` so `torch.ops.custom_op` is available. Hardware profile architecture selection is an input to compilation, not runtime hardware verification.
+For the default CMake path, build configuration is controlled by the repository template. The generated `.asc` file supplies kernel logic, host launch wrappers, and a `TORCH_LIBRARY` / `TORCH_LIBRARY_IMPL` binding. The template builds a **process-local** `libcustom_op.so` with RPATH to Torch, `torch_npu`, and CANN libraries. It does not run `cmake --install`, does not produce a `custom_opp_*.run` package, and does not write into site-packages or `$ASCEND_OPP_PATH/vendors`. The worker loads that `.so` with `torch.ops.load_library` so `torch.ops.custom_op` is available. Hardware profile architecture selection is an input to compilation, not runtime hardware verification.
 
-Build and evaluation always compile `custom_op.asc` with the CMake template and load `libcustom_op.so`. Sources carrying the `ASCEND_HOST_SECTION` marker build in split mode: `build.py` separates the device and host sections, generates the `extern "C"` launch-stub TU from the kernel signatures, and compiles the host glue as plain C++ with a shared precompiled header cached per environment. Unmarked sources build as a single ASC translation unit. Both modes produce the same process-local library contract; there is no pybind11 path.
+For Ascend C, build and evaluation compile `custom_op.asc` with CMake or the optional DeepJIT path and load a process-local library. DeepJIT prepares device kernels through a framework-owned extension. For pyasc they import `kernel.py` and let pyasc trace and compile on the first launch. Sources carrying the `ASCEND_HOST_SECTION` marker build in split mode: `build.py` separates the device and host sections, generates the `extern "C"` launch-stub TU from the kernel signatures, and compiles the host glue as plain C++ with a shared precompiled header cached per environment. Unmarked sources build as a single ASC translation unit. Both modes produce the same process-local library contract; there is no pybind11 path.
 
-The [evaluation guide](../guide/evaluation.md) documents seeded initialization, tolerance rules, CPU-reference fallback, timeout accounting, and event timing. The [task authoring guide](../task_authoring.md) describes both reference and candidate contracts.
+The [evaluation guide](../guide/evaluation.md) documents seeded initialization, tolerance rules, CPU-reference fallback, timeout accounting, and timing scope. Ascend C uses NPU events (device scope); pyasc uses synchronized wall clock (end-to-end scope) for both candidate and live reference. The [task authoring guide](../task_authoring.md) describes both reference and candidate contracts.
 
 ## Persistence and scoring boundary
 

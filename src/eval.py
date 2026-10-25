@@ -1,7 +1,7 @@
-"""Isolated evaluation of generated Ascend C samples.
+"""Isolated evaluation of generated samples.
 
 Static check runs on the host; build, correctness, and timing run in the
-worker subprocess started by evaluate_run.
+worker subprocess started by evaluate_run. One run uses one backend.
 """
 
 from __future__ import annotations
@@ -14,14 +14,19 @@ import yaml
 from loguru import logger
 
 from . import rundir
-from .checker import check_custom_op_asc, check_model_new
+from .backend import DEFAULT_BACKEND, Backend, sample_files
+from .checker import check_sample_sources
 from .config import (
+    DEFAULT_BUILD_BACKEND,
+    BuildBackend,
+    DeepJitConfig,
     EvalConfig,
     HardwareProfile,
     load_eval_config,
     load_hardware_profile,
 )
 from .dataset import Task, load_task
+from .deepjit_build import resolve_deepjit_settings
 from .eval_device import eval_sample_on_device
 from .eval_result import fail_result
 from .io_util import (
@@ -53,17 +58,54 @@ def _persist_eval_result(
     return result
 
 
-def _load_run_settings(run_dir: Path) -> tuple[EvalConfig, HardwareProfile]:
-    """Load the default protocol and the hardware recorded for run_dir."""
+def _resolve_build_settings(
+    run_dir: Path, config: EvalConfig
+) -> tuple[BuildBackend, DeepJitConfig]:
+    """Resolve the build backend and DeepJIT settings for one run.
+
+    The run record wins over the evaluation config, so one run keeps the same
+    build path no matter how the config file changed since.
+
+    Raises:
+        ValueError: If DeepJIT is selected without a checkout to build against.
+    """
+    build_backend = rundir.generation_build_backend(run_dir) or config.build_backend
+    recorded = rundir.generation_deepjit(run_dir)
+    settings = resolve_deepjit_settings(
+        DeepJitConfig.model_validate({**config.deepjit.model_dump(), **recorded})
+    )
+    if build_backend is BuildBackend.DEEPJIT and not settings.root:
+        raise ValueError(
+            "build_backend=deepjit needs a DeepJIT checkout: set deepjit.root "
+            "in the evaluation config, record it in the run, or export "
+            "DEEPJIT_ROOT"
+        )
+    return build_backend, settings
+
+
+def _load_run_settings(
+    run_dir: Path,
+) -> tuple[EvalConfig, HardwareProfile, Backend, BuildBackend, DeepJitConfig]:
+    """Load the protocol, the hardware, and the build path recorded for a run."""
     config = load_eval_config()
+    backend = rundir.resolve_run_backend(run_dir)
+    build_backend, deepjit = _resolve_build_settings(run_dir, config)
+    if backend is Backend.PYASC and build_backend is BuildBackend.DEEPJIT:
+        raise ValueError("build_backend=deepjit requires backend=ascendc")
     hardware_file = rundir.generation_hardware_file(run_dir)
     if hardware_file:
         try:
-            return config, load_hardware_profile(hardware_file)
+            return (
+                config,
+                load_hardware_profile(hardware_file),
+                backend,
+                build_backend,
+                deepjit,
+            )
         except (OSError, ValueError, yaml.YAMLError) as exc:
             logger.warning("ignoring recorded hardware_file {}: {}", hardware_file, exc)
     hw_name = rundir.generation_hardware_name(run_dir) or config.hardware
-    return config, load_hardware_profile(hw_name)
+    return config, load_hardware_profile(hw_name), backend, build_backend, deepjit
 
 
 def eval_sample(
@@ -72,44 +114,64 @@ def eval_sample(
     *,
     hardware: HardwareProfile,
     config: EvalConfig,
+    backend: Backend = DEFAULT_BACKEND,
+    build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
+    deepjit: DeepJitConfig | None = None,
     harness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
 
-    sample_dir must already hold custom_op.asc and model_new.py; the
-    returned dict is also written to sample_dir/eval_result.json.
+    sample_dir must already hold the backend's kernel artifact and
+    model_new.py; the returned dict is also written to
+    sample_dir/eval_result.json.
     """
+    if backend is Backend.PYASC and build_backend is BuildBackend.DEEPJIT:
+        raise ValueError("build_backend=deepjit requires backend=ascendc")
     sample_dir = Path(sample_dir).resolve()
-    model_new_path = sample_dir / "model_new.py"
-    asc_path = sample_dir / "custom_op.asc"
-    if not asc_path.is_file() or not model_new_path.is_file():
+    kernel_name, wrapper_name = sample_files(backend)
+    kernel_path = sample_dir / kernel_name
+    wrapper_path = sample_dir / wrapper_name
+    if not kernel_path.is_file() or not wrapper_path.is_file():
         return _persist_eval_result(
             sample_dir,
             fail_result(
-                compilation_error=("sample dir missing custom_op.asc or model_new.py")
+                compilation_error=(
+                    f"sample dir missing {kernel_name} or {wrapper_name}"
+                ),
+                backend=backend.value,
+                failure_stage="static_check",
             ),
             harness=harness,
         )
 
-    violations = check_custom_op_asc(asc_path.read_text(encoding="utf-8"))
-    violations += check_model_new(model_new_path.read_text(encoding="utf-8"))
+    violations = check_sample_sources(
+        backend,
+        kernel_path.read_text(encoding="utf-8"),
+        wrapper_path.read_text(encoding="utf-8"),
+    )
     if violations:
         return _persist_eval_result(
             sample_dir,
             fail_result(
                 compilation_error="; ".join(violations),
                 static_check_error=violations,
+                backend=backend.value,
+                failure_stage="static_check",
             ),
             harness=harness,
         )
 
     timeout_s = config.eval_timeout + 2 * config.build_timeout
-    logger.debug("eval {} in {}", task.task_id, sample_dir)
+    logger.debug("eval {} ({}) in {}", task.task_id, backend.value, sample_dir)
     result = _run_eval_worker(
         {
             "task_py": task.task_py,
             "sample_dir": str(sample_dir),
+            "backend": backend.value,
+            "build_backend": build_backend.value,
+            "deepjit": (deepjit or DeepJitConfig()).model_dump(),
             "cmake_arch": hardware.cmake_arch,
+            "soc_version": hardware.soc_version,
             "hardware_name": hardware.name,
             "device": "npu:0",
             "seed": config.seed,
@@ -147,16 +209,17 @@ def evaluate_run(
 
     Raises:
         FileNotFoundError: If the run directory does not exist.
-        ValueError: If the selection contains no complete samples.
+        ValueError: If the selection contains no complete samples, or the
+            run records an unknown backend.
     """
     run_dir = rundir.resolve_run(run)
-    samples = list(rundir.iter_sample_dirs(run_dir, level=level))
+    config, hardware, backend, build_backend, deepjit = _load_run_settings(run_dir)
+    samples = list(rundir.iter_sample_dirs(run_dir, level=level, backend=backend))
     if not samples:
         if level is not None:
             raise ValueError(f"no samples in {run_dir} for level {level}")
         raise ValueError(f"no samples in {run_dir}")
 
-    config, hardware = _load_run_settings(run_dir)
     harness = rundir.generation_harness(run_dir)
     for task_id, sample_id, sample_path in samples:
         result = eval_sample(
@@ -164,8 +227,16 @@ def evaluate_run(
             sample_path,
             hardware=hardware,
             config=config,
+            backend=backend,
+            build_backend=build_backend,
+            deepjit=deepjit,
             harness=harness,
         )
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["backend"] = backend.value
+            metadata["build_backend"] = build_backend.value
+            write_json_atomic(sample_path / "eval_result.json", result)
         if on_sample is not None:
             on_sample(task_id, sample_id, result)
 
@@ -185,8 +256,14 @@ def worker_main(argv: list[str]) -> None:
     try:
         result = eval_sample_on_device(**cfg)
     except Exception as exc:
+        # A crashed worker proves nothing about compilation, so the sample is
+        # reported as not compiled with the stage recorded.
         logger.exception("eval worker crashed")
-        result = fail_result(compiled=True, runtime_error=repr(exc))
+        result = fail_result(
+            runtime_error=repr(exc),
+            failure_stage="worker",
+            backend=str(cfg.get("backend", DEFAULT_BACKEND.value)),
+        )
     write_json_atomic(result_path, result)
 
 
@@ -194,14 +271,24 @@ def _run_eval_worker(cfg: dict[str, Any], timeout_s: int) -> dict[str, Any]:
     """Spawn the repo worker script and return its payload."""
     outcome = IsolatedJsonWorker.for_eval(timeout_s).run(cfg)
     if outcome.timed_out:
-        return fail_result(runtime_error=f"eval timed out after {timeout_s}s")
+        return fail_result(
+            runtime_error=f"eval timed out after {timeout_s}s",
+            failure_stage="timeout",
+            backend=str(cfg.get("backend", DEFAULT_BACKEND.value)),
+        )
     if outcome.returncode != 0:
         err = outcome.stderr.strip()
         return fail_result(
-            runtime_error=err[-2000:] or f"worker exited with code {outcome.returncode}"
+            runtime_error=(
+                err[-2000:] or f"worker exited with code {outcome.returncode}"
+            ),
+            failure_stage="worker",
+            backend=str(cfg.get("backend", DEFAULT_BACKEND.value)),
         )
     if outcome.payload is not None:
         return outcome.payload
     return fail_result(
-        runtime_error=outcome.parse_error or "worker produced no result.json"
+        runtime_error=outcome.parse_error or "worker produced no result.json",
+        failure_stage="worker",
+        backend=str(cfg.get("backend", DEFAULT_BACKEND.value)),
     )

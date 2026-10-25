@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from .python_ast import WrapperSemantics
+import ast
+
+from .python_ast import Sink, WrapperSemantics, _collect_module_scalars
 from .rules import PatternRule, run_rules
 from .text import dedupe, prepare_python_source
 
@@ -105,11 +107,13 @@ PYTHON_PATTERN_RULES: tuple[PatternRule, ...] = (
 ############################# REGEX RULE CATALOG #############################
 
 
-def check_model_new(source: str) -> list[str]:
+def check_model_new(source: str, *, sink: Sink | None = None) -> list[str]:
     """Return static-check violations for generated model_new.py source.
 
     Args:
         source: Raw model_new.py text.
+        sink: Allowed compute sink; None means torch.ops.custom_op, the
+            Ascend C contract. pyasc passes its kernel-module sink.
 
     Returns:
         Deduplicated human-readable violations; empty means pass.
@@ -117,7 +121,16 @@ def check_model_new(source: str) -> list[str]:
     code = prepare_python_source(source)
     violations = run_rules(code, PYTHON_PATTERN_RULES)
     try:
-        violations.extend(WrapperSemantics(source).violations)
+        # Module-level value constants are shape bookkeeping; function names are
+        # not, so a helper call stays visible to the checker.
+        module_scalars = _collect_module_scalars(
+            ast.parse(code), include_functions=False
+        )
+        violations.extend(
+            WrapperSemantics(
+                source, sink=sink, module_scalars=module_scalars
+            ).violations
+        )
     except SyntaxError as exc:
         violations.append(f"model_new.py does not parse as Python: {exc}")
     return dedupe(violations)

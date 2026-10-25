@@ -21,7 +21,7 @@
 |                                                                      |
 |                          AscendKernelBench                           |
 |                                                                      |
-|        [ LLM ]=======>{ Ascend C }=======>{ libcustom_op.so }        |
+|       [ LLM ]=======>{ Ascend C / pyasc }=======>{ Ascend NPU }       |
 |                 fast_p   |   pass@k   |   SOL score                  |
 |                                                                      |
 \======================================================================/
@@ -40,6 +40,8 @@ documentation site.
 
 - [Generation and evaluation](guide/workflows.md)
 - [Evaluation protocol](guide/evaluation.md)
+- [pyasc authoring backend](guide/pyasc-backend.md)
+- [DeepJIT build backend](guide/deepjit.md)
 - [Results and metrics](guide/results.md)
 - [Troubleshooting](guide/troubleshooting.md)
 
@@ -61,11 +63,12 @@ documentation site.
 ## What the benchmark measures
 
 The input is a PyTorch reference `Model`. A language model produces two files:
-`custom_op.asc`, containing the Ascend C kernel and binding, and `model_new.py`,
-containing a compatible `ModelNew` wrapper. The evaluator checks that wrapper,
-builds a process-local `libcustom_op.so`, loads it in the PyTorch process,
-compares outputs, and measures eligible candidates against `torch_npu` eager
-execution. [Results and metrics](guide/results.md) explains how `fast_p`,
+`custom_op.asc` for Ascend C or `kernel.py` for pyasc, together with a
+compatible `ModelNew` wrapper in `model_new.py`. The evaluator checks the
+source, builds or JIT-compiles it inside a worker, compares outputs, and
+measures eligible candidates against live `torch_npu` eager execution.
+Ascend C uses device-event timing; pyasc measures synchronized end-to-end
+invocations, including host dispatch and launch overhead. [Results and metrics](guide/results.md) explains how `fast_p`,
 `pass@k`, and the optional roofline SOL score are calculated and which samples
 enter each denominator.
 

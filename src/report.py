@@ -43,8 +43,17 @@ def sample_status_label(result: dict[str, object]) -> tuple[str, str]:
     return status.style, status.label
 
 
+def _counts_text(counts: object) -> str:
+    """Return a compact 'name count' list for a summary counter map."""
+    if not isinstance(counts, dict) or not counts:
+        return "0"
+    return ", ".join(f"{name} {count}" for name, count in counts.items())
+
+
 def eval_result_lines(result: dict[str, object]) -> tuple[str, list[str]]:
     """Return the Rich style and summary lines for one evaluation result."""
+    from .score import sample_speedup
+
     style, label = sample_status_label(result)
     lines = [
         f"status: {label}",
@@ -53,24 +62,14 @@ def eval_result_lines(result: dict[str, object]) -> tuple[str, list[str]]:
     ]
     runtime = result.get("runtime")
     ref_runtime = result.get("ref_runtime")
-    if (
-        isinstance(runtime, int | float)
-        and isinstance(ref_runtime, int | float)
-        and runtime
-    ):
-        from .score import sample_speedup
-
+    if isinstance(runtime, int | float):
         speedup = sample_speedup(result)
-        if speedup is None:
-            lines.append(
-                f"runtime: {runtime:.4f} ms "
-                f"(ref {ref_runtime:.4f} ms; speedup not eligible)"
-            )
-        else:
-            lines.append(
-                f"runtime: {runtime:.4f} ms "
-                f"(ref {ref_runtime:.4f} ms, speedup {speedup:.2f}x)"
-            )
+        detail = f"speedup {speedup:.2f}x" if speedup is not None else "no speedup"
+        lines.append(
+            f"runtime: {runtime:.4f} ms (ref {ref_runtime:.4f} ms, {detail})"
+            if isinstance(ref_runtime, int | float)
+            else f"runtime: {runtime:.4f} ms ({detail})"
+        )
     metadata = result.get("metadata") or {}
     if isinstance(metadata, dict):
         err = metadata.get("compilation_error") or metadata.get("runtime_error")
@@ -132,9 +131,36 @@ def print_eval_report(
         "flagged excessive speedup",
         str(summary.get("excessive_speedup", 0)),
     )
+    # Shown even when zero: a rejected timing keeps its correctness credit but
+    # is excluded from every performance number above fast_0.
+    table.add_row(
+        "invalid timing (excluded from perf)",
+        str(summary.get("timing_invalid", 0)),
+    )
     table.add_row(
         "hidden-distribution failures",
         str(summary.get("hidden_failed", 0)),
+    )
+    # Shown even when zero: an unsupported backend is a coverage gap, not a
+    # model failure, and must not be readable as a pass.
+    table.add_row(
+        "unsupported dtype (backend)",
+        str(summary.get("unsupported_dtype_backend_wide", 0)),
+    )
+    table.add_row(
+        "unsupported operator (DSL)",
+        str(summary.get("unsupported_operator", 0)),
+    )
+    # Runtime failures by exception class and by stage that raised them. Shown
+    # even when empty: the class names a symptom, not a culprit, so the reader
+    # sees what happened without the report assigning blame.
+    table.add_row(
+        "runtime failures (class)",
+        _counts_text(summary.get("runtime_error_classes")),
+    )
+    table.add_row(
+        "runtime failures (stage)",
+        _counts_text(summary.get("runtime_error_stages")),
     )
     for key, value in summary["fast_p"].items():
         table.add_row(key, f"{value:.3f}")

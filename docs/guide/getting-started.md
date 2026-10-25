@@ -119,12 +119,20 @@ See [LLM service configuration](../deploy_llm_service.md) for endpoint behavior 
 
 ## Prepare an Ascend evaluation machine
 
-The repository's fixed build template expects:
+All evaluation paths require an accessible Linux Ascend runtime. The default
+Ascend C CMake path expects:
 
 - A Linux host with an accessible Ascend NPU and its driver/runtime.
 - A CANN environment providing the `ASC` CMake package/compiler. The template documents CANN 9.1.0 or newer as its requirement.
 - A compatible PyTorch and `torch_npu` installation, importable in the active Python environment.
 - CMake 3.16 or newer, Python development headers, and a C++17/GCC toolchain with a discoverable `libgcc.a`.
+
+For pyasc, also install the matching `pyasc` package (`pyasc==1.1.1` is the
+selected version); the import name is `asc`. For DeepJIT, provide a checkout
+through `DEEPJIT_ROOT` and a host compiler with `std::format` support (GCC 13
+or newer). These are optional dependencies: generation, analysis, and offline
+tests do not import them. See [pyasc](pyasc-backend.md) and
+[DeepJIT](deepjit.md) for backend-specific setup.
 
 Use the installation and compatibility instructions for the stack on your machine; this repository does not provide a universal version matrix. Some tasks also import additional packages, particularly at level 4. Inspect the selected task's imports before starting a large run.
 
@@ -144,6 +152,18 @@ print("NPU available:", torch.npu.is_available())
 PY
 ```
 
-This checks basic imports and device availability. Successful compilation, correctness, and performance must be verified on the target machine. The documentation work performed on macOS does not establish any NPU evaluation result.
+This checks basic imports and device availability. Validate compilation,
+correctness, and timing on the target machine with:
+
+```bash
+python tests/run_tests.py
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
+```
+
+`--output` is a directory containing case subdirectories and the aggregate
+`smoke_results.json`. The offline suite needs no NPU. The smoke runner uses
+the selected installed backends, with `--case` available to select cases and
+`--repeat 2` to exercise warm builds. Passing its cases does not imply support
+for all 270 tasks.
 
 Continue with [generation and evaluation workflows](workflows.md), or consult [troubleshooting](troubleshooting.md) if setup fails.

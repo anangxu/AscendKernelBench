@@ -10,35 +10,46 @@ A stale `AGENTS.md` is a bug.
 ## What this project is
 
 AscendKernelBench is a *generate, then evaluate* benchmark for LLM-written
-Ascend C kernels on Huawei Ascend NPUs. A model reads a PyTorch reference
-`Model` from the vendored KernelBench corpus and must emit exactly two
-artifacts: `custom_op.asc` and `model_new.py`. The harness compiles the
-`.asc` into a **process-local** `libcustom_op.so`, loads it with
-`torch.ops.load_library` inside a worker PyTorch process, checks outputs
-against the reference, and times eligible kernels against live `torch_npu`
-eager execution. Scoring is KernelBench `fast_p` / `pass@k` plus an optional
+kernels on Huawei Ascend NPUs. A model reads a PyTorch reference `Model` from
+the vendored KernelBench corpus and must emit exactly two artifacts. The
+backend decides their names: Ascend C (the default) uses `custom_op.asc` and
+`model_new.py`; pyasc uses `kernel.py` and `model_new.py`. One run is one
+backend. The harness builds the sample through that backend's path, loads
+the operator inside a worker PyTorch process, checks outputs against the
+reference, and times eligible kernels against live `torch_npu` eager
+execution. Ascend C compiles `.asc` into a process-local `libcustom_op.so`
+loaded with `torch.ops.load_library`; pyasc imports `kernel.py` and JITs on
+the first call. Scoring is KernelBench `fast_p` / `pass@k` plus an optional
 roofline SOL score.
 
 ```text
 KernelBench task + hardware profile
   -> prompt.py -> llm.py -> runs/{run}/level{L}/{task}/sample_{i}/
-       (prompt.txt, custom_op.asc, model_new.py, response_raw.txt)
+       (prompt.txt, the backend's kernel file, model_new.py, response_raw.txt)
   -> eval.py static checks (checker.py / checks/)
   -> isolated worker (scripts/_eval_worker.py)
-  -> build.py + build_template/ -> libcustom_op.so -> torch.ops.load_library
+  -> Ascend C + cmake: build.py + build_template/ -> libcustom_op.so
        (marked sources: split kernel/launcher/host units + shared host PCH)
-  -> eval_device.py: seeded correctness -> hidden value gate
-       (d1..d4) -> NPU-event timing -> fresh-input re-check
+  -> Ascend C + deepjit: deepjit_build.py -> extension -> device prepare
+  -> pyasc: pyasc_runtime.py -> kernel.py imported; the first call JITs
+  -> eval_device.py: seeded correctness -> hidden value gate (d1..d4)
+       -> timing -> fresh-input re-check
+       (Ascend C: NPU events; pyasc: synchronized wall clock)
   -> per-sample eval_result.json
   -> eval_results.json + pass_at_k_results.json -> score.py / scripts/analyze.py
 ```
 
-`custom_op.asc` has two sections separated by one
+For the Ascend C backend, `custom_op.asc` has two sections separated by one
 `// ==================== ASCEND_HOST_SECTION ====================` line:
 device kernels above (compiled without torch headers), torch glue below
 (compiled as plain C++ against the shared PCH). The host wrapper launches
 kernels through generated `<kernel>_launch(numBlocks, stream, args...)`
-stubs. Unmarked legacy sources still build as a single ASC unit.
+stubs. Unmarked legacy sources still build as a single ASC unit with CMake.
+The DeepJIT path requires marked sources. build_backend is meaningful only
+for backend=ascendc; pyasc plus deepjit is rejected.
+The optional `// ==================== ASCEND_KERNEL_SECTION ====================`
+lines above the host marker split a multi-kernel device section into one
+deepjit compilation unit per entry; see `docs/guide/deepjit.md`.
 
 Current scope: generation and evaluation CLIs only. There is **no**
 automatic compile-error repair agent and no scheduler / multi-device queue.
@@ -51,6 +62,9 @@ automatic compile-error repair agent and no scheduler / multi-device queue.
 python -m pip install -r requirements.txt
 pre-commit install   # optional
 
+# Offline regression tests; no NPU or endpoint required
+python tests/run_tests.py
+
 # Optional before you land Python changes
 pre-commit run --all-files
 
@@ -62,7 +76,8 @@ python -m pip install -r requirements.txt
 # Workflow CLIs (run from the checkout root)
 export OPENAI_BASE_URL="https://provider.example/v1" OPENAI_API_KEY="..."
 python scripts/generate.py --task level1/19_ReLU --model <model> \
-    --hardware ascend910b2 --run-name relu_demo [--level N] [--n-samples N] \
+    --hardware ascend910b2 --run-name relu_demo [--backend ascendc|pyasc] \
+    [--level N] [--n-samples N] \
     [--prompt-mode zero_shot|one_shot|few_shot] [--temperature T] [--config PATH] \
     [--max-tokens N] [--reasoning-effort low|medium|high]
 # Fixed comparison set: 20 level1 tasks, every fifth task of the level.
@@ -73,7 +88,14 @@ python scripts/generate.py --tasks-file configs/subsets/level1_20.txt \
 ASCEND_RT_VISIBLE_DEVICES=0 python scripts/evaluate.py relu_demo [level]
 python scripts/analyze.py relu_demo
 python scripts/baseline.py --level 1 --hardware ascend910b2 --device npu:0
+
+# Validate installed backend runtimes on an Ascend host
+export DEEPJIT_ROOT=/path/to/DeepJIT
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
+
+The smoke runner takes an output directory and writes its summary to
+`<output>/smoke_results.json`, alongside the case subdirectories.
 
 CLI facts worth remembering:
 
@@ -85,10 +107,17 @@ CLI facts worth remembering:
   `--hardware`. Generation also selects tasks with `--tasks-file` and
   forwards `--max-tokens` / `--reasoning-effort` to the endpoint; both are
   recorded in the run's `generation_config.yaml`.
-* Response parsing accepts a JSON object holding `custom_op_asc` and
-  `model_new_py`, or two fenced code blocks. Endpoints that reject
+* Repeating a generation run name resumes missing samples. Omitted options
+  inherit the recorded values; conflicting settings and partial artifact
+  overwrites are refused. The library create_run defaults to resume=False.
+* Response parsing accepts `custom_op_asc` (Ascend C) or `kernel_py` (pyasc)
+  together with `model_new_py`, or two fenced code blocks. Endpoints that reject
   `response_format` (DeepSeek-compatible ones) answer the structured request
   with that JSON, so the JSON path is the one that runs there.
+* `scripts/generate.py --build-backend deepjit` (with `--deepjit-root` and an
+  optional `--deepjit-commit`) records the build backend and the DeepJIT
+  settings in the run; `scripts/evaluate.py` reads them from there. `cmake`
+  stays the default. The combination pyasc plus deepjit is refused.
 * `scripts/_eval_worker.py` is internal. Never call it by hand; it is spawned
   by `eval.eval_sample`.
 * Offline analysis (`analyze.py`, `score.py`) needs neither torch nor an NPU.
@@ -99,15 +128,19 @@ CLI facts worth remembering:
 | --- | --- |
 | `KernelBench/level{1..4}/` | Vendored corpus: 270 tasks (100/100/50/20). Read-only in spirit. |
 | `src/` | Engine: dataset, prompt, LLM, checks, eval, build, timing, scoring, reporting. |
-| `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `python_source.py`/`text.py` (entry points and masking). |
+| `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `pyasc.py` (pyasc kernel, launcher, and call graph), `python_source.py`/`text.py` (entry points and masking). |
+| `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
+| `src/pyasc_runtime.py` | Worker-side pyasc runtime: sample-local JIT cache, real-file kernel import, platform and device selection, first-call timing. |
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
+| `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, per-kernel unit split, generated runtime/launcher, host extension build, and the framework prepare entry. |
+| `tests/` | Offline suites via `python tests/run_tests.py`; device checks via `python tests/npu_backend_smoke.py --output PATH`, with optional `--case`. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
 | `configs/hardware/*.yaml` | Hardware profiles validated by `config.HardwareProfile`. Default `ascend910b2`; `ascend950pr` is reserved and unvalidated. |
 | `configs/subsets/*.txt` | Fixed task subsets for comparable runs. `level1_20.txt` is every fifth level1 task, loaded with `--tasks-file`. Keep the lists stable. |
 | `requirements.txt` | Third-party dependencies; the only pip install file. |
 | `.pre-commit-config.yaml` | Optional Ruff and basic file hooks on `src/` and `scripts/`. |
-| `build_template/CMakeLists.txt` | The single build path that produces `libcustom_op.so`. |
+| `build_template/CMakeLists.txt` | The default build path that produces `libcustom_op.so`; `build_backend=deepjit` uses `deepjit_build.py` instead. |
 | `docs/` | English guides (`guide/`) and references (`reference/`). |
 | `runs/`, `results/` | Generated artifacts; gitignored. Never commit them. |
 
@@ -119,17 +152,19 @@ root (`src/` sits directly under that root).
 
 ## Invariants — do not break these
 
-1. **Process-local operators.** Build in the sample directory and load with
+1. **Process-local operators.** Ascend C builds in the sample directory and loads with
    `torch.ops.load_library`. Never install into site-packages, `$ASCEND_OPP_PATH`,
    or a global vendor directory; never run `cmake --install`; never emit a
    `custom_opp_*.run` package. Parallel jobs must not share mutable install state.
-2. **`torch.library` registration only.** `TORCH_LIBRARY` /
+2. **Ascend C uses `torch.library` registration only.** `TORCH_LIBRARY` /
    `TORCH_LIBRARY_IMPL` under namespace `custom_op`. pybind11 is banned and the
    checker enforces it.
 3. **Compute belongs to the device.** The host wrapper may allocate and launch
    only; no ATen compute, no `aclnn*`/`aclop` vendor ops, no host side effects
    (process, network, dlopen, threads). `model_new.py` may call only
-   `torch.ops.custom_op` (plus integer shape arithmetic); `nn` modules may be
+   `torch.ops.custom_op`, or the checked pyasc launcher, plus scalar shape
+   arithmetic. Candidate annotations do not prove scalar types; every helper
+   call site must establish scalar arguments. `nn` modules may be
    parameter containers but must never be called.
 4. **Static checks are advisory; the runtime protocol is the backstop.** The
    fresh-input re-check, the four hidden value transforms (d1..d4), and the
@@ -149,8 +184,36 @@ root (`src/` sits directly under that root).
    offline analysis work on machines without a device.
 8. **English everywhere** in code, prompts, checker messages, comments, and docs.
 9. **Never reformat or edit vendored `KernelBench/` tasks** to satisfy lint.
-10. **CPU-reference fallback is not a free pass.** It only changes the
+10. **pyasc is a second backend, never a mixed one.** `kernel.py` is
+    imported from its real file (pyasc reads the source with introspection);
+    `PYASC_CACHE_DIR` is exported per sample before asc is imported; only
+    `kernel_fn[core_num](...)` compiles and launches, so a successful import
+    is never reported as a compiled sample. `first_call_seconds` is a compound
+    trace+compile+launch figure and must not be called a compile time.
+    Formal evaluation uses NPU execution and refuses simulator selection.
+    Finish PyTorch input preparation and mutation snapshots before launching
+    pyasc kernels on their independent runtime stream.
+    A launcher must also synchronize its own PyTorch padding or copy work
+    before a pyasc launch; torch.npu.synchronize is allowed for this backend.
+11. **CPU-reference fallback is not a free pass.** It only changes the
     correctness reference; such samples have no NPU speedup and no SOL score.
+
+12. **The deepjit build path is opt-in and framework-owned.** It applies to
+    Ascend C samples, one run records one build backend, and the framework
+    owns the DeepJIT runtime, the kernel source, and the cache: candidates
+    never run build commands. An unsupported source is refused with an
+    explicit build error and never falls back to CMake, and a missing DeepJIT
+    checkout never affects the CMake path. One compilation unit per kernel
+    entry: the split uses the explicit kernel-section marker lines only, never
+    a pattern that could cut a body, and every unit must hold exactly one
+    entry. A process-owned file lock protects the build; stale Torch locks
+    are removed only while exclusive. Dependency contents and build settings
+    enter the signature; a dirty label alone is not cache identity.
+13. **Timing scope is part of the protocol.** Ascend C uses NPU events with
+    timing_method=npu_event and timing_scope=device. pyasc uses synchronized
+    wall clock for both candidate and reference, timing_method=synchronized_wall
+    and timing_scope=end_to_end. Host dispatch is included for pyasc; do not
+    compare its latency or speedup directly with device-only results.
 
 ## Conventions
 
@@ -203,7 +266,13 @@ root (`src/` sits directly under that root).
 | New task | Add to `KernelBench/levelN/` keeping `Model`, `get_inputs`, `get_init_inputs`; see `docs/task_authoring.md`. Task source is validated statically and never executed at load time. |
 | New comparison subset | `configs/subsets/<name>.txt` + `docs/guide/workflows.md`. Fix the sampling rule in the manifest header and keep the list stable. |
 
-## Local host notes (this checkout, not upstream truths)
+## Historical host notes (the original Ascend checkout)
+
+These measurements describe the earlier CANN 9.1.0 environment, not every
+checkout or the current integration host. The integration target uses an
+Ascend 910B2, CANN 9.2.0-beta.2, Python 3.12, GCC 13, PyTorch 2.10.0, and
+torch-npu 2.10.0.post6. pyasc 1.1.1 is the selected optional runtime. Run the
+backend smoke suite there before claiming device validation.
 
 * Two Python environments exist here: the default base conda env (3.14, has
   `ruff`/`pre-commit`, **no torch**) for optional lint, and the AscendKernelBench
@@ -254,7 +323,7 @@ root (`src/` sits directly under that root).
 
 ## Definition of done
 
-1. Pre-commit passes when you use it (optional).
+1. Offline regression suites pass; pre-commit passes when used (optional).
 2. New behavior validated on an Ascend host when it touches build, eval, or timing.
 3. CLI, result-field, or protocol changes update `README.md` and the matching
    `docs/` page — and this file if any of the above changed.

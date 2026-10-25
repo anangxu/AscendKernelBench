@@ -21,11 +21,26 @@ def _threshold_name(t: float) -> str:
     return f"fast_{t:g}"
 
 
+def _by_count(counts: Mapping[str, int]) -> dict[str, int]:
+    """Return a count map ordered by descending count, then by key."""
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
 def sample_speedup(sample: Mapping[str, Any]) -> float | None:
-    """Return speedup (ref mean / kernel mean), or None if unavailable."""
+    """Return speedup (ref mean / kernel mean), or None if unusable.
+
+    A sample whose timing the backend rejected is excluded here, and this is
+    the only gate the performance numbers read: the thresholds above fast_0,
+    the geometric mean and the per-problem best speedup all come through it.
+    Correctness rates are computed from the correctness flag instead, so the
+    sample still counts there.
+    """
     if not sample.get("correctness"):
         return None
-    if (sample.get("metadata") or {}).get("excessive_speedup"):
+    metadata = sample.get("metadata") or {}
+    if metadata.get("excessive_speedup"):
+        return None
+    if metadata.get("timing_valid") is False:
         return None
     runtime = sample.get("runtime")
     ref_runtime = sample.get("ref_runtime")
@@ -99,6 +114,38 @@ def summarize_eval_results(
     hidden_failed = sum(
         1 for sample in all_samples if _meta(sample).get("hidden_failed")
     )
+    # Samples the backend cannot run at all stay in every rate above; these
+    # counters keep them visible so a success rate cannot hide the gap.
+    unsupported_dtype = sum(
+        1
+        for sample in all_samples
+        if _meta(sample).get("failure_stage") == "unsupported_dtype"
+    )
+    unsupported_operator = sum(
+        1
+        for sample in all_samples
+        if _meta(sample).get("failure_stage") == "unsupported_operator"
+    )
+    timing_invalid = sum(
+        1 for sample in all_samples if _meta(sample).get("timing_valid") is False
+    )
+    # Runtime failures are classified generically, by exception class and by
+    # the stage that raised. The harness records what happened; it never
+    # decides on its own whether the model or the environment caused it, so
+    # these counters report both without moving a sample out of any rate.
+    runtime_classes: dict[str, int] = {}
+    runtime_stages: dict[str, int] = {}
+    for sample in all_samples:
+        meta = _meta(sample)
+        name = meta.get("runtime_error_class")
+        if name:
+            runtime_classes[str(name)] = runtime_classes.get(str(name), 0) + 1
+        elif meta.get("runtime_error"):
+            key = "unclassified"
+            runtime_classes[key] = runtime_classes.get(key, 0) + 1
+        stage = meta.get("runtime_error_stage")
+        if stage:
+            runtime_stages[str(stage)] = runtime_stages.get(str(stage), 0) + 1
     per_problem: dict[str, dict[str, Any]] = {}
     for problem_id, samples in eval_results.items():
         n = len(samples)
@@ -117,6 +164,17 @@ def summarize_eval_results(
         "npu_reference": npu_reference,
         "excessive_speedup": flagged,
         "hidden_failed": hidden_failed,
+        "unsupported_dtype": unsupported_dtype,
+        "unsupported_dtype_backend_wide": sum(
+            1
+            for sample in all_samples
+            if _meta(sample).get("failure_stage") == "unsupported_dtype"
+            and _meta(sample).get("limitation_scope") == "backend"
+        ),
+        "unsupported_operator": unsupported_operator,
+        "timing_invalid": timing_invalid,
+        "runtime_error_classes": _by_count(runtime_classes),
+        "runtime_error_stages": _by_count(runtime_stages),
         "fast_p": fast_p(all_samples),
         "geometric_mean_speedup_correct_only": geometric_mean_speedup(all_samples),
         "mean_sol_score": mean_sol_score(all_samples),

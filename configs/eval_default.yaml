@@ -1,6 +1,23 @@
 # Default evaluation configuration for AscendKernelBench.
 hardware: ascend910b2
 
+# Ascend C build path: cmake (default) or deepjit. pyasc rejects deepjit.
+# Empty deepjit fields use DEEPJIT_ROOT, DEEPJIT_COMMIT, DEEPJIT_CXX,
+# and DEEPJIT_CACHE_DIR from the local environment.
+build_backend: cmake
+deepjit:
+  root: ""
+  commit: ""
+  cxx: ""
+  # Absolute elfutils include/library paths if outside the compiler defaults.
+  # See docs/guide/deepjit.md; verified DeepJIT loads libdw at runtime.
+  include_dirs: []
+  library_dirs: []
+  env: {}
+  extra_cflags: []
+  extra_ldflags: []
+  cache_dir: ""
+
 ########################### CORRECTNESS ###########################
 # Five seeded trials, all must pass (docs/guide/evaluation.md).
 num_correct_trials: 5
@@ -14,7 +31,7 @@ precision: fp32
 
 ########################## PERFORMANCE ############################
 # Ten warmups follow SOL-ExecBench isolation practice; the 100 retained
-# trials keep KernelBench-style timing statistics.
+# trials use NPU events for Ascend C, synchronized wall clock for pyasc.
 num_perf_trials: 100
 num_warmup: 10
 # Above this speedup a sample is flagged for review: kept in fast_0, but
@@ -23,15 +40,16 @@ excessive_speedup: 10.0
 ########################## PERFORMANCE ############################
 
 ############################ TIMEOUTS #############################
-# Seconds. Build runs configure and build, each allowed build_timeout; the
-# host worker budget is eval_timeout + 2 * build_timeout.
+# Seconds. CMake configure and build each receive build_timeout.
+# Every backend has host worker budget eval_timeout + 2 * build_timeout.
 build_timeout: 600
 eval_timeout: 300
 ############################ TIMEOUTS #############################
 
 ########################## GENERATION #############################
-# Thinking depth (low | medium | high); empty omits the parameter. Reasoning
-# tokens count against max_tokens, which is why the budget is this large.
+# Reasoning tokens count against max_tokens; empty depth omits the parameter.
+# backend selects ascendc or pyasc and is recorded in generation_config.yaml.
+# Evaluation reads authoring and build backends from that run record.
 generation:
   model: deepseek-flash
   temperature: 0.0
@@ -39,4 +57,5 @@ generation:
   num_samples: 1
   prompt_mode: one_shot
   reasoning_effort: high
+  backend: ascendc
 ########################## GENERATION #############################

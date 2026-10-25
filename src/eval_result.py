@@ -10,6 +10,8 @@ __all__ = [
     "compiled_result",
     "eval_protocol_metadata",
     "fail_result",
+    "runtime_failure",
+    "summarize_runtime_error",
 ]
 
 _TOP_LEVEL_RESULT_KEYS = {
@@ -21,6 +23,35 @@ _TOP_LEVEL_RESULT_KEYS = {
     "ref_runtime_stats",
     "metadata",
 }
+
+_RUNTIME_SUMMARY_LIMIT = 240
+
+
+def summarize_runtime_error(exc: BaseException) -> str:
+    """Return a one-line summary of a runtime exception message."""
+    text = " ".join(str(exc).split())
+    if len(text) > _RUNTIME_SUMMARY_LIMIT:
+        return text[: _RUNTIME_SUMMARY_LIMIT - 3] + "..."
+    return text
+
+
+def runtime_failure(exc: BaseException, *, stage: str) -> dict[str, object]:
+    """Return the classification metadata of one runtime exception.
+
+    The class and the stage say what happened and where. Nothing here decides
+    whether the model or the environment caused it: an out-of-memory error can
+    come from a bad tiling plan or from a device limit, and the summary keeps
+    the message the runtime produced so a reader can tell them apart.
+
+    Args:
+        exc: The exception that ended the step.
+        stage: Where it was raised, for example candidate_trial or timing.
+    """
+    return {
+        "runtime_error_class": type(exc).__name__,
+        "runtime_error_stage": stage,
+        "runtime_error_summary": summarize_runtime_error(exc),
+    }
 
 
 def fail_result(

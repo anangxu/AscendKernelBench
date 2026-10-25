@@ -63,9 +63,9 @@ Batch generation exits successfully if at least one requested sample was saved. 
 
 ## No samples, stale files, or unexpected run contents
 
-`evaluate.py` discovers `level*/<task>/sample_*` directories only when both `custom_op.asc` and `model_new.py` exist. An empty run directory or incomplete sample produces no evaluable sample. Sample directory names must end in an integer, such as `sample_0`.
+`evaluate.py` discovers `level*/<task>/sample_*` directories only when both of the run backend's artifacts exist: `custom_op.asc` and `model_new.py` for Ascend C, or `kernel.py` and `model_new.py` for pyasc. An empty run directory or incomplete sample produces no evaluable sample. Sample directory names must end in an integer, such as `sample_0`.
 
-Run names are reusable, but the scripts do not provide automatic resume or experiment isolation. Regeneration overwrites matching sample files and the run configuration. Old results or extra sample directories can remain. Use a fresh run name for each experiment and preserve the original run when testing changes.
+Repeating a generation run name resumes missing samples and skips complete ones. Omitted options inherit the recorded settings; explicit conflicts and partial artifact overwrites are refused. Use a fresh run name to change an experiment. Evaluation still overwrites selected results, so preserve a copy before changing the device or protocol.
 
 When moving between machines or incompatible Python environments, carry the candidate sources and generation metadata, and rebuild in a fresh sample directory on the target host. Existing `build/` contents and `libcustom_op.so` / `custom_op*.so` files belong to the environment that produced them. Do not install those libraries into site-packages or the CANN OPP vendors path; the evaluator loads the sample-local `.so` with `torch.ops.load_library`.
 

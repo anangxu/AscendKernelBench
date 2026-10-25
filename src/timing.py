@@ -1,18 +1,20 @@
-"""NPU event timing with per-trial L2 clearing (docs/guide/evaluation.md).
+"""NPU event and synchronized wall timing with per-trial L2 clearing.
 
-Warmup empties the allocator cache; each trial times one call with an event
-pair, thrashes L2 outside the event window, and drops the first trial.
+Both methods exclude input preparation and L2 clearing from measurements.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
 from .compare import tensor_nbytes
 from .runtime import seed_torch
+
+TimingMethod = Literal["npu_event", "synchronized_wall"]
 
 DEFAULT_L2_CLEAR_BYTES = 256 * 1024 * 1024
 # Input sets larger than this reuse one allocation during timing (KernelBench
@@ -68,8 +70,12 @@ class AdaptiveInputTimer:
         num_trials: int,
         device: Any,
         l2_clear_size: int,
+        timing_method: TimingMethod = "npu_event",
     ) -> None:
         """Draw the probe input set and record the refresh decision."""
+        if timing_method not in ("npu_event", "synchronized_wall"):
+            raise ValueError(f"unknown timing method: {timing_method!r}")
+        self._timing_method = timing_method
         self._draw_inputs = draw_inputs
         self._seed = seed
         self._num_warmup = num_warmup
@@ -91,7 +97,12 @@ class AdaptiveInputTimer:
     def time(self, kernel_fn: Callable[..., Any]) -> list[float]:
         """Time kernel_fn(*inputs) with the configured warmup and trials."""
         seed_torch(self._seed)
-        return time_execution_with_npu_event(
+        measure = (
+            time_execution_with_synchronized_wall
+            if self._timing_method == "synchronized_wall"
+            else time_execution_with_npu_event
+        )
+        return measure(
             lambda: kernel_fn(*self._perf_box[0]),
             [],
             num_warmup=self._num_warmup,
@@ -161,15 +172,66 @@ def time_execution_with_npu_event(
     return elapsed_times
 
 
+def time_execution_with_synchronized_wall(
+    kernel_fn: Callable[..., Any],
+    args: Sequence[Any],
+    *,
+    num_warmup: int,
+    num_trials: int,
+    device: Any,
+    l2_clear_size: int,
+    setup: Callable[[], None] | None = None,
+    discard_first: int = 1,
+) -> list[float]:
+    """Time calls and device completion with a wall clock, in milliseconds.
+
+    Synchronization covers every NPU stream. Input setup and L2 clearing
+    complete before the clock starts; host dispatch and completion are timed.
+    """
+    import torch
+
+    previous_device = torch.npu.current_device()
+    torch.npu.set_device(device)
+    try:
+        for _ in range(num_warmup):
+            if setup is not None:
+                setup()
+            kernel_fn(*args)
+            torch.npu.synchronize(device=device)
+        torch.npu.empty_cache()
+
+        elapsed_times: list[float] = []
+        ##################### TIMED LOOP #####################
+        for trial in range(num_trials + discard_first):
+            if setup is not None:
+                setup()
+            clear_l2_cache(device=device, size_bytes=l2_clear_size)
+            torch.npu.synchronize(device=device)
+
+            started = time.perf_counter()
+            kernel_fn(*args)
+            torch.npu.synchronize(device=device)
+            elapsed_time_ms = (time.perf_counter() - started) * 1000.0
+            if trial >= discard_first:
+                elapsed_times.append(elapsed_time_ms)
+        ##################### TIMED LOOP #####################
+    finally:
+        torch.npu.set_device(previous_device)
+
+    return elapsed_times
+
+
 def get_timing_stats(elapsed_times: Sequence[float]) -> dict[str, float | int]:
     """Return mean/std/min/max/num_trials rounded to 3 significant digits.
 
     Raises:
-        ValueError: If elapsed_times is empty.
+        ValueError: If timings are empty, nonfinite, or nonpositive.
     """
     if not elapsed_times:
         raise ValueError("elapsed_times must be a non-empty sequence")
     values = np.asarray(elapsed_times, dtype=np.float64)
+    if not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError("timings must contain only finite, positive milliseconds")
     return {
         "mean": float(f"{float(np.mean(values)):.3g}"),
         "std": float(f"{float(np.std(values)):.3g}"),
