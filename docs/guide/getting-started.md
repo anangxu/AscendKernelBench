@@ -157,11 +157,13 @@ correctness, and timing on the target machine with:
 
 ```bash
 python tests/run_tests.py
-python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
 
-The offline suite needs no NPU. The smoke runner uses the selected installed
-backends, with `--case` available to select cases and `--repeat 2` to exercise
-warm builds. Passing its cases does not imply support for all 270 tasks.
+`--output` is a directory containing case subdirectories and the aggregate
+`smoke_results.json`. The offline suite needs no NPU. The smoke runner uses
+the selected installed backends, with `--case` available to select cases and
+`--repeat 2` to exercise warm builds. Passing its cases does not imply support
+for all 270 tasks.
 
 Continue with [generation and evaluation workflows](workflows.md), or consult [troubleshooting](troubleshooting.md) if setup fails.

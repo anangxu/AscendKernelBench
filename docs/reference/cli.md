@@ -124,12 +124,14 @@ Run device smoke cases with the normal correctness and timing protocol:
 
 ```bash
 export DEEPJIT_ROOT=/path/to/DeepJIT
-python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
 
-`--output PATH` is required. `--case NAME` may be repeated to select cases;
-`--help` lists their names. `--repeat 2` repeats selected cases to exercise warm
-builds, and `--hardware` defaults to `ascend910b2`. The complete suite covers
+`--output PATH` is a required directory; case subdirectories and the aggregate
+`smoke_results.json` are written inside it. Without `--case`, all seven cases
+run once. `--case NAME` may be repeated to select cases; `--help` lists their
+names. `--repeat 2` runs each selected case twice to exercise warm builds,
+and `--hardware` defaults to `ascend910b2`. The complete suite covers
 CMake, DeepJIT, and pyasc and therefore needs all three runtimes installed.
 A passing smoke run validates its cases only, not the full task corpus.
 

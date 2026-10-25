@@ -91,8 +91,11 @@ python scripts/baseline.py --level 1 --hardware ascend910b2 --device npu:0
 
 # Validate installed backend runtimes on an Ascend host
 export DEEPJIT_ROOT=/path/to/DeepJIT
-python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
+
+The smoke runner takes an output directory and writes its summary to
+`<output>/smoke_results.json`, alongside the case subdirectories.
 
 CLI facts worth remembering:
 

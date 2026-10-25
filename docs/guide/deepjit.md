@@ -296,13 +296,15 @@ Run offline regressions and then the device smoke suite on the target host:
 ```bash
 python tests/run_tests.py
 export DEEPJIT_ROOT=/path/to/DeepJIT
-python tests/npu_backend_smoke.py --repeat 2 --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --repeat 2 --output /tmp/ascend-kernel-bench-smoke
 ```
 
-The second command sequence needs the Ascend runtime and all selected
-backends. Use repeated `--case` options to select cases; `--help` lists their
-names. Repeats exercise warm builds. Preserve the output with the environment
-and revision used; selected smoke cases do not establish full-corpus coverage.
+`--output` is a directory containing case subdirectories and the aggregate
+`smoke_results.json`. The second command sequence needs the Ascend runtime
+and all selected backends. Use repeated `--case` options to select cases;
+`--help` lists their names. Repeats exercise warm builds. Preserve the output
+with the environment and revision used; selected smoke cases do not establish
+full-corpus coverage.
 
 ## Known limits
 

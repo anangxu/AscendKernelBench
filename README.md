@@ -225,10 +225,12 @@ On an Ascend host, validate the three execution paths and save the report:
 
 ```bash
 export DEEPJIT_ROOT=/path/to/DeepJIT
-python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
 
-Use `--case` to select a case; run the command with `--help` for choices.
+`--output` is a directory containing case subdirectories and the aggregate
+`smoke_results.json`. Use `--case` to select a case; run the command with
+`--help` for choices.
 Offline tests cover generation, run identity, checks, dispatch, and build
 recovery; they do not establish device correctness or full-corpus coverage.
 

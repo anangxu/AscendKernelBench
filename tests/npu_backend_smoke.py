@@ -48,7 +48,12 @@ CASES = {
 def main() -> int:
     """Evaluate selected examples and save complete results outside the corpus."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="directory for case subdirectories and aggregate smoke_results.json",
+    )
     parser.add_argument("--case", action="append", choices=list(CASES))
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--hardware", default="ascend910b2")

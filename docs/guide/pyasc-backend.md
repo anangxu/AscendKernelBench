@@ -184,10 +184,12 @@ python tests/run_tests.py
 On the target Ascend host, install the chosen pyasc/CANN pairing and run:
 
 ```bash
-python tests/npu_backend_smoke.py --output /tmp/backend-smoke.json
+python tests/npu_backend_smoke.py --output /tmp/ascend-kernel-bench-smoke
 ```
 
-Use `--case` to select an individual case (`--help` lists the choices).
+`--output` is a directory containing case subdirectories and the aggregate
+`smoke_results.json`. Use `--case` to select an individual case (`--help` lists
+the choices).
 Formal evaluation requires NPU execution and rejects simulator selection
 through `ASCEND_KERNEL_BENCH_PYASC_BACKEND`. A pyasc simulator experiment is
 separate from benchmark evaluation and cannot establish NPU correctness,
