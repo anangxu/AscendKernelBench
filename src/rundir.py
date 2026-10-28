@@ -642,6 +642,24 @@ def iter_sample_dirs(
     )
 
 
+def write_case_results(sample_dir_path: Path, payload: dict[str, Any]) -> Path:
+    """Write per-case results for one sample, keeping the old files intact."""
+    path = Path(sample_dir_path) / "case_results.json"
+    write_json_atomic(path, payload)
+    return path
+
+
+def load_case_results(sample_dir_path: Path) -> dict[str, Any] | None:
+    """Load case_results.json from one sample directory, if present."""
+    path = Path(sample_dir_path) / "case_results.json"
+    if not path.is_file():
+        return None
+    try:
+        return read_json_object(path)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def load_eval_result(sample_dir_path: Path) -> dict[str, Any] | None:
     """Load eval_result.json from a sample directory, if present."""
     path = Path(sample_dir_path) / "eval_result.json"

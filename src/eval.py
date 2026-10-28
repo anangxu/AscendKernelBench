@@ -118,6 +118,7 @@ def eval_sample(
     build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
     deepjit: DeepJitConfig | None = None,
     harness: dict[str, Any] | None = None,
+    case: object | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
 
@@ -185,6 +186,7 @@ def eval_sample(
             "memory_bandwidth_gbps": hardware.memory_bandwidth_gbps,
             "peak_tflops": hardware.peak_tflops_for(config.precision),
             "l2_clear_size": l2_clear_bytes(hardware.l2_cache_mb),
+            "case": case.record() if case is not None else {},
         },
         timeout_s=timeout_s,
     )
@@ -230,6 +232,20 @@ def evaluate_run(
     for task_id, sample_id, sample_path in samples:
         task = load_task(task_id)
         rundir.verify_task_meta(run_dir, [task])
+        if task.cases:
+            payload = _evaluate_cases(
+                task,
+                sample_path,
+                hardware=hardware,
+                config=config,
+                backend=backend,
+                build_backend=build_backend,
+                deepjit=deepjit,
+                harness=harness,
+            )
+            if on_sample is not None:
+                on_sample(task_id, sample_id, payload["summary"])
+            continue
         result = eval_sample(
             task,
             sample_path,
@@ -252,6 +268,37 @@ def evaluate_run(
     rundir.write_eval_results(run_dir, results)
     rundir.write_pass_at_k(run_dir, compute_pass_at_k(results))
     return results
+
+
+def _evaluate_cases(task, sample_path, *, hardware, config, backend, build_backend,
+                    deepjit, harness) -> dict:
+    """Run one candidate against every declared case and record each result."""
+    from . import cases as cases_module
+
+    statuses: dict[int, str] = {}
+    records: dict[str, object] = {}
+    for case in task.cases:
+        result = eval_sample(
+            task, sample_path, hardware=hardware, config=config, backend=backend,
+            build_backend=build_backend, deepjit=deepjit, harness=harness, case=case,
+        )
+        compiled = bool(result.get("compiled"))
+        if result.get("correctness") is True:
+            status = "passed"
+        elif compiled:
+            status = "failed"
+        else:
+            status = "error"
+        statuses[case.case_id] = status
+        records[str(case.case_id)] = {
+            "case": case.record(), "status": status, "compiled": compiled,
+            "correctness": result.get("correctness"),
+            "metadata": result.get("metadata", {}),
+        }
+    payload = {"summary": cases_module.summarize(task.cases, statuses).record(),
+               "cases": records}
+    rundir.write_case_results(sample_path, payload)
+    return payload
 
 
 def worker_main(argv: list[str]) -> None:
