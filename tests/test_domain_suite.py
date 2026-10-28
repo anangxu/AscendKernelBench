@@ -103,7 +103,7 @@ class KernelBenchCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(files), 270)
         self.assertEqual(
             [item.task_id for item in discover_tasks(suite="cann")],
-            ["cann/nn/swiglu"],
+            ["cann/nn/rmsnorm", "cann/nn/swiglu"],
         )  # noqa: E501
 
 
