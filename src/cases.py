@@ -193,30 +193,27 @@ def compare_outputs(reference, candidate, *, atol: float, rtol: float):
     cand = candidate.detach().to(torch.float32)
     if tuple(ref.shape) != tuple(cand.shape):
         return False, f"shape {tuple(cand.shape)} != {tuple(ref.shape)}"
+    if ref.numel() == 0:
+        return False, "empty output"
     ref_nan = torch.isnan(ref)
     cand_nan = torch.isnan(cand)
     if bool((ref_nan != cand_nan).any()):
         return False, "NaN mask mismatch"
-    finite = ~ref_nan & torch.isfinite(ref)
-    total = int(ref.numel())
-    if total == 0:
-        return False, "empty output"
+    finite = ~ref_nan
     if int(finite.sum()) == 0:
-        return bool(ref_nan.all() and cand_nan.all()), "all non-finite"
+        return True, "all non-finite and matching"
     ref_f, cand_f = ref[finite], cand[finite]
     ref_inf, cand_inf = torch.isinf(ref_f), torch.isinf(cand_f)
     if bool((ref_inf != cand_inf).any()):
         return False, "Inf position mismatch"
-    if bool(ref_inf.any()) and bool(
-        (torch.sign(ref_f[ref_inf]) != torch.sign(cand_f[cand_inf])).any()
-    ):
-        return False, "Inf sign mismatch"
+    if bool(ref_inf.any()):
+        if bool((torch.sign(ref_f[ref_inf]) != torch.sign(cand_f[cand_inf])).any()):
+            return False, "Inf sign mismatch"
     keep = ~ref_inf
-    if bool(keep.any()) and not bool(
-        torch.allclose(ref_f[keep], cand_f[keep], rtol=rtol, atol=atol, equal_nan=False)
-    ):
-        return False, "finite values out of tolerance"
-    return True, f"{int(finite.sum())}/{total} finite compared"
+    if bool(keep.any()):
+        if not bool(torch.allclose(ref_f[keep], cand_f[keep], rtol=rtol, atol=atol)):
+            return False, "finite values out of tolerance"
+    return True, "ok"
 
 
 def aggregate_speedup(records: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
