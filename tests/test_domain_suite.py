@@ -104,6 +104,15 @@ class KernelBenchCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             [item.task_id for item in discover_tasks(suite="cann")],
             ["cann/nn/rmsnorm", "cann/nn/swiglu"],
+        )
+        self.assertEqual(
+            sorted(
+                item.task_id
+                for item in discover_tasks(
+                    suite="cann", roots={"cann": ROOT / "tests/fixtures/domain_suite/cann"}
+                )
+            ),
+            ["cann/fixture_add", "cann/fixture_add_multi"],
         )  # noqa: E501
 
 
@@ -123,7 +132,12 @@ class CannSuiteTests(unittest.TestCase):
 
     def test_suite_discovery_finds_the_fixture(self):
         tasks = discover_tasks(suite="cann", roots=CANN_ROOTS)
-        self.assertEqual([item.task_id for item in tasks], [FIXTURE_ID])
+        # The fixture root holds two fixtures: the single-case add and the
+        # multi-case add used by the case-adapter acceptance.
+        self.assertEqual(
+            [item.task_id for item in tasks],
+            ["cann/fixture_add", "cann/fixture_add_multi"],
+        )
         selected = select_tasks(task_ids=[FIXTURE_ID], roots=CANN_ROOTS)
         self.assertEqual([item.task_id for item in selected], [FIXTURE_ID])
 
