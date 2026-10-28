@@ -109,10 +109,14 @@ def load_cases(
             raise ValueError(f"{path}: every case must be a mapping")
         try:
             case_id = int(raw["case_id"])
-            shapes = tuple(tuple(int(item) for item in shape) for shape in raw["input_shape"])
+            shapes = tuple(
+                tuple(int(item) for item in shape) for shape in raw["input_shape"]
+            )
             dtypes = tuple(str(item) for item in raw["dtype"])
             attrs = dict(raw.get("attrs") or {})
-            low, high = (float(item) for item in raw.get("value_range", [0.0, 1.0]))
+            low, high = (
+                float(item) for item in raw.get("value_range", [0.0, 1.0])
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"{path}: malformed case {raw!r}: {exc}") from exc
         specs.append(
