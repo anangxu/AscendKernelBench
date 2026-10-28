@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-CASE_STATUSES = ("pending", "passed", "failed", "unsupported", "error")
+CASE_STATUSES = ("pending", "not_run", "passed", "failed", "unsupported", "error")
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,7 @@ class CaseSummary:
     failed: int = 0
     unsupported: int = 0
     errors: int = 0
+    not_run: int = 0
     statuses: dict[int, str] = field(default_factory=dict)
 
     @property
@@ -76,6 +77,7 @@ class CaseSummary:
             "cases_failed": self.failed,
             "cases_unsupported": self.unsupported,
             "cases_error": self.errors,
+            "cases_not_run": self.not_run,
             "task_correct": self.task_correct,
             "statuses": {
                 str(key): value for key, value in sorted(self.statuses.items())
@@ -200,4 +202,6 @@ def summarize(cases: tuple[CaseSpec, ...], statuses: Mapping[int, str]) -> CaseS
         elif status == "error":
             summary.errors += 1
             summary.executed += 1
+        elif status == "not_run":
+            summary.not_run += 1
     return summary

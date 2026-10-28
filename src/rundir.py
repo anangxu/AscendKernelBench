@@ -642,6 +642,13 @@ def iter_sample_dirs(
     )
 
 
+def write_eval_result(sample_dir_path: Path, result: dict[str, Any]) -> Path:
+    """Write eval_result.json for a sample (case tasks reuse this file)."""
+    path = Path(sample_dir_path) / "eval_result.json"
+    write_json_atomic(path, result)
+    return path
+
+
 def write_case_results(sample_dir_path: Path, payload: dict[str, Any]) -> Path:
     """Write per-case results for one sample, keeping the old files intact."""
     path = Path(sample_dir_path) / "case_results.json"
