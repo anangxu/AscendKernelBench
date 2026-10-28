@@ -77,7 +77,9 @@ class CaseSummary:
             "cases_unsupported": self.unsupported,
             "cases_error": self.errors,
             "task_correct": self.task_correct,
-            "statuses": {str(key): value for key, value in sorted(self.statuses.items())},
+            "statuses": {
+                str(key): value for key, value in sorted(self.statuses.items())
+            },
         }
 
 
