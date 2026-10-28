@@ -118,9 +118,7 @@ def load_cases(
             )
             dtypes = tuple(str(item) for item in raw["dtype"])
             attrs = dict(raw.get("attrs") or {})
-            low, high = (
-                float(item) for item in raw.get("value_range", [0.0, 1.0])
-            )
+            low, high = (float(item) for item in raw.get("value_range", [0.0, 1.0]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"{path}: malformed case {raw!r}: {exc}") from exc
         specs.append(
