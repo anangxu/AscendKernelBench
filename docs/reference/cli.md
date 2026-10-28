@@ -55,6 +55,9 @@ There is no `--resume` flag. Repeat `--run-name` to continue: omitted options in
 
 Generation errors are printed and the batch continues. The script exits with status 1 if **all** generation attempts fail; a partially successful batch returns status 0. Check the final saved/expected count before proceeding. Configuration, task loading, and prompt-construction errors can also stop execution.
 
+`--suite kernelbench|cann` selects the suite whose tasks are discovered when no
+`--task` or `--tasks-file` is given. Default discovery is unchanged.
+
 ## `scripts/evaluate.py`
 
 Build, check, and time complete source pairs in an existing run. Requires the Ascend evaluation environment. There are no flags.
@@ -74,6 +77,9 @@ This command is a thin wrapper around `evaluate_run`. Embedding code should call
 It writes per-sample `eval_result.json`, then the run's `eval_results.json` and `pass_at_k_results.json`, and prints the same report as `analyze.py`. Evaluating one level overwrites that level's per-sample results and rebuilds aggregates from every stored result in the run.
 
 Missing runs or a selection with no samples cause a nonzero exit. Individual compilation and correctness failures are recorded as results; a completed batch does not return a failing exit code merely because candidates failed. Inspect the result files when using this command in automation.
+
+`--suite kernelbench|cann` restricts evaluation to that suite; the positional
+level still filters KernelBench levels.
 
 ## `scripts/baseline.py`
 

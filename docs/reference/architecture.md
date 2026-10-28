@@ -32,6 +32,7 @@ KernelBench task + hardware profile
 | --- | --- |
 | `KernelBench/level*/` | Reference task files in the original `Model`/input-generator format. |
 | `dataset.py` | Static contract validation, task loading, and discovery. |
+| `suite.py` | Task suite ids and roots, path-safe id resolution, content hash, and optional task provenance. |
 | `config.py` | Evaluation defaults and hardware-profile loading from YAML. |
 | `prompt.py` | Task source, hardware information, examples, and output-contract assembly. |
 | `llm.py` | Endpoint requests, structured/fenced response handling, and basic deliverable validation. |

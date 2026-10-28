@@ -223,20 +223,29 @@ def select_tasks(
     level: int | None = None,
     task_ids: list[str] | None = None,
     tasks_file: str | Path | None = None,
+    suite: str | None = None,
+    roots: dict[str, Path] | None = None,
 ) -> list[Task]:
     """Load tasks from explicit IDs, a manifest file, a level, or the corpus.
 
+    Args:
+        level: KernelBench level filter.
+        task_ids: Explicit full task ids; their suite comes from the id.
+        tasks_file: Manifest with one full task id per line.
+        suite: Suite to discover when no explicit id or manifest is given;
+            defaults to KernelBench, so old commands are unchanged.
+
     Returns:
         Loaded tasks. Explicit IDs win over a manifest, which wins over
-        level.
+        level, which wins over suite discovery.
     """
     if task_ids is not None:
-        return [load_task(item) for item in task_ids]
+        return [load_task(item, roots=roots) for item in task_ids]
     if tasks_file is not None:
-        return [load_task(item) for item in read_task_ids(tasks_file)]
+        return [load_task(item, roots=roots) for item in read_task_ids(tasks_file)]
     if level is not None:
         return discover_tasks(level=level)
-    return discover_tasks()
+    return discover_tasks(suite=suite, roots=roots)
 
 
 def generation_run_config(
@@ -245,6 +254,7 @@ def generation_run_config(
     hardware_name: str,
     task_ids: list[str],
     hardware_file: str | None = None,
+    task_meta: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, object]:
     """Return the mapping written to generation_config.yaml."""
     payload: dict[str, object] = {
@@ -259,6 +269,10 @@ def generation_run_config(
         "hardware": hardware_name,
         "tasks": list(task_ids),
     }
+    if task_meta:
+        payload["task_meta"] = {
+            task_id: dict(item) for task_id, item in task_meta.items()
+        }
     if settings.deepjit:
         payload["deepjit"] = dict(settings.deepjit)
     if hardware_file:

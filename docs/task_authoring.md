@@ -10,6 +10,16 @@ Discovery reads `*.py` files directly inside each `level*` directory and sorts f
 
 An explicit task load also accepts the legacy `level{L}/{task}/task.py` layout, but automatic discovery only scans the single-file layout. Add new tasks as single files.
 
+## Domain task suites
+
+A second suite can hold industry tasks without touching the KernelBench corpus.
+Its ids are namespaced (`cann/nn/rmsnorm`) and resolved under
+`domain_benchmarks/cann/`; a task is a directory with `task.py` plus an optional
+`meta.yaml` carrying `source`, `source_revision`, and `category`. The run record
+stores each task's suite, source, category, and content hash; a resume or
+re-evaluation refuses a task whose source changed. Phase 1 ships no real CANN
+task, only the offline fixture under `tests/fixtures/domain_suite/cann/`.
+
 ## Reference contract
 
 | Symbol | Contract |

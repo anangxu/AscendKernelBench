@@ -195,6 +195,7 @@ def evaluate_run(
     run: str | Path,
     level: int | None = None,
     *,
+    suite: str | None = None,
     on_sample: Callable[[str, int, dict[str, Any]], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Evaluate complete samples in a run and write aggregates.
@@ -202,6 +203,7 @@ def evaluate_run(
     Args:
         run: Run directory name under runs/, or an existing path.
         level: When set, only evaluate samples under level{level}/.
+        suite: When set, only evaluate samples of that task suite.
         on_sample: Called with (task_id, sample_id, result) after each sample.
 
     Returns:
@@ -214,16 +216,22 @@ def evaluate_run(
     """
     run_dir = rundir.resolve_run(run)
     config, hardware, backend, build_backend, deepjit = _load_run_settings(run_dir)
-    samples = list(rundir.iter_sample_dirs(run_dir, level=level, backend=backend))
+    samples = list(
+        rundir.iter_sample_dirs(run_dir, level=level, backend=backend, suite=suite)
+    )
     if not samples:
         if level is not None:
             raise ValueError(f"no samples in {run_dir} for level {level}")
+        if suite is not None:
+            raise ValueError(f"no samples in {run_dir} for suite {suite}")
         raise ValueError(f"no samples in {run_dir}")
 
     harness = rundir.generation_harness(run_dir)
     for task_id, sample_id, sample_path in samples:
+        task = load_task(task_id)
+        rundir.verify_task_meta(run_dir, [task])
         result = eval_sample(
-            load_task(task_id),
+            task,
             sample_path,
             hardware=hardware,
             config=config,

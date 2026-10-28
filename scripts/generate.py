@@ -24,6 +24,7 @@ from src.cli_util import (
     select_tasks,
 )
 from src.config import BuildBackend
+from src.dataset import task_meta
 from src.llm import LLMClient
 from src.log import die, setup_logging
 from src.prompt import build_prompt, system_prompt
@@ -75,6 +76,12 @@ def main() -> None:
     parser.add_argument("--n-samples", type=int, default=None)
     parser.add_argument("--model", default=None)
     parser.add_argument("--hardware", default=None)
+    parser.add_argument(
+        "--suite",
+        default=None,
+        choices=["kernelbench", "cann"],
+        help="task suite to discover when no --task or --tasks-file is given",
+    )
     parser.add_argument(
         "--tasks-file",
         default=None,
@@ -135,6 +142,7 @@ def main() -> None:
 
     tasks = select_tasks(
         level=args.level,
+        suite=args.suite,
         task_ids=(
             recorded.get("tasks")
             if args.task is None
@@ -162,6 +170,7 @@ def main() -> None:
                 hardware_name=hardware.name,
                 task_ids=[task.task_id for task in tasks],
                 hardware_file=hardware_file,
+                task_meta=task_meta(tasks),
             ),
             resume=True,
         )

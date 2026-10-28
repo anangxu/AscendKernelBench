@@ -224,10 +224,17 @@ def test_omitted_flags_execute_recorded_values() -> None:
         and recorded_after.get("deepjit", {}).get("commit") == PIN,
         str(recorded_after.get("deepjit")),
     )
+    before_keys = set(before) - {"task_meta"}
     check(
         "the record is not restamped by the continuation",
-        recorded_after == before,
-        str(sorted(set(recorded_after) ^ set(before))),
+        {key: recorded_after.get(key) for key in before_keys}
+        == {key: before.get(key) for key in before_keys},
+        str(sorted(set(recorded_after) ^ before_keys)),
+    )
+    check(
+        "only task provenance was added",
+        set(recorded_after) - before_keys <= {"task_meta"},
+        str(sorted(set(recorded_after) - before_keys)),
     )
     check("the sample was written", sample_written)
 

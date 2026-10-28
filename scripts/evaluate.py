@@ -38,18 +38,28 @@ def main() -> None:
         type=int,
         help="evaluate only this level (omit to evaluate every level)",
     )
+    parser.add_argument(
+        "--suite",
+        default=None,
+        choices=["kernelbench", "cann"],
+        help="evaluate only this task suite",
+    )
     args = parser.parse_args()
 
     run_dir = resolve_run_dir(args.run)
 
-    samples = list(rundir.iter_sample_dirs(run_dir, level=args.level))
+    samples = list(rundir.iter_sample_dirs(run_dir, level=args.level, suite=args.suite))
     if not samples:
         if args.level is not None:
             die(f"no samples in {run_dir} for level {args.level}")
+        if args.suite is not None:
+            die(f"no samples in {run_dir} for suite {args.suite}")
         die(f"no samples in {run_dir}")
 
     if args.level is not None:
         scope = f"level {args.level} of {run_dir}"
+    elif args.suite is not None:
+        scope = f"suite {args.suite} of {run_dir}"
     else:
         scope = str(run_dir)
     logger.info("evaluating {} samples from {}", len(samples), scope)
@@ -69,7 +79,9 @@ def main() -> None:
                     progress.console.print(f"    {line}")
             progress.advance(bar)
 
-        results = evaluate_run(run_dir, args.level, on_sample=on_sample)
+        results = evaluate_run(
+            run_dir, args.level, suite=args.suite, on_sample=on_sample
+        )
 
     logger.info("wrote {}", run_dir / "eval_results.json")
     print_eval_report(console, run_dir.name, results)

@@ -80,6 +80,8 @@ python scripts/generate.py --task level1/19_ReLU --model <model> \
     [--level N] [--n-samples N] \
     [--prompt-mode zero_shot|one_shot|few_shot] [--temperature T] [--config PATH] \
     [--max-tokens N] [--reasoning-effort low|medium|high]
+# CANN domain suite (no real tasks ship in phase 1; --task also takes a full id).
+python scripts/generate.py --suite cann --model <model> --run-name cann_demo
 # Fixed comparison set: 20 level1 tasks, every fifth task of the level.
 python scripts/generate.py --tasks-file configs/subsets/level1_20.txt \
     --model <model> --reasoning-effort high --run-name level1_20
@@ -127,6 +129,8 @@ CLI facts worth remembering:
 | Path | What lives there |
 | --- | --- |
 | `KernelBench/level{1..4}/` | Vendored corpus: 270 tasks (100/100/50/20). Read-only in spirit. |
+| `domain_benchmarks/cann/` | CANN domain task suite root: empty in phase 1; a task is a directory with `task.py` and optional `meta.yaml`, id `cann/<path>`. |
+| `src/suite.py` | Task suite registry: id namespacing, root resolution, path safety, content hash, and optional `meta.yaml` provenance. |
 | `src/` | Engine: dataset, prompt, LLM, checks, eval, build, timing, scoring, reporting. |
 | `src/checks/` | Static anti-cheat: `rules.py` (regex catalogs), `python_ast.py` (wrapper AST), `ascend_c.py` (Ascend C), `pyasc.py` (pyasc kernel, launcher, and call graph), `python_source.py`/`text.py` (entry points and masking). |
 | `src/backend.py` | Backend registry: names, artifact filenames, and generation field names. |
@@ -134,6 +138,7 @@ CLI facts worth remembering:
 | `src/prompts/examples/` | Few-shot example pairs used by prompt.py. |
 | `src/deepjit_build.py` | Optional deepjit build path for Ascend C: device-source conversion, per-kernel unit split, generated runtime/launcher, host extension build, and the framework prepare entry. |
 | `tests/` | Offline suites via `python tests/run_tests.py`; device checks via `python tests/npu_backend_smoke.py --output PATH`, with optional `--case`. |
+| `tests/fixtures/domain_suite/` | Offline CANN task fixture (`cann/fixture_add`); never part of the real corpus. |
 | `scripts/` | The four user CLIs plus `_bootstrap.py` / `_eval_worker.py`. |
 | `configs/eval_default.yaml` | Default protocol: 5 correctness trials, 10 warmup + 100 perf trials, tolerances, timeouts, generation defaults. |
 | `configs/hardware/*.yaml` | Hardware profiles validated by `config.HardwareProfile`. Default `ascend910b2`; `ascend950pr` is reserved and unvalidated. |
@@ -184,6 +189,9 @@ root (`src/` sits directly under that root).
    offline analysis work on machines without a device.
 8. **English everywhere** in code, prompts, checker messages, comments, and docs.
 9. **Never reformat or edit vendored `KernelBench/` tasks** to satisfy lint.
+   Task ids carry their suite: KernelBench keeps `levelN/stem`, other suites are
+   `suite/...`; a run records one suite per task and its source hash, and a
+   changed source is refused instead of re-evaluated.
 10. **pyasc is a second backend, never a mixed one.** `kernel.py` is
     imported from its real file (pyasc reads the source with introspection);
     `PYASC_CACHE_DIR` is exported per sample before asc is imported; only
@@ -264,6 +272,7 @@ root (`src/` sits directly under that root).
 | New CLI flag | Thin `scripts/*.py` argparse + `cli_util.py` factory + `docs/reference/cli.md`. |
 | Build backend | `build.py` (`build_custom_op` / `load_custom_op` are the only surface) + `build_template/CMakeLists.txt`. |
 | New task | Add to `KernelBench/levelN/` keeping `Model`, `get_inputs`, `get_init_inputs`; see `docs/task_authoring.md`. Task source is validated statically and never executed at load time. |
+| New task suite | `src/suite.py` (`SUITE_IDS`, `SUITE_ROOTS`, `task_dir`) + `src/_paths.py` + `src/dataset.py` discovery + `--suite` in the CLIs; see `domain_benchmarks/cann/README.md`. |
 | New comparison subset | `configs/subsets/<name>.txt` + `docs/guide/workflows.md`. Fix the sampling rule in the manifest header and keep the list stable. |
 
 ## Historical host notes (the original Ascend checkout)

@@ -6,6 +6,8 @@ import json
 import sys
 import tempfile
 import unittest
+
+import yaml
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -132,7 +134,13 @@ class BackendGenerationTests(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertIsNone(client.call_args.kwargs["reasoning_effort"])
-        self.assertEqual(before, (run / "generation_config.yaml").read_bytes())
+        recorded_after = yaml.safe_load(
+            (run / "generation_config.yaml").read_text(encoding="utf-8")
+        )
+        recorded_before = yaml.safe_load(before.decode("utf-8"))
+        self.assertEqual(recorded_before.get("deepjit"), recorded_after.get("deepjit"))
+        recorded_after.pop("task_meta", None)
+        self.assertEqual(recorded_before, recorded_after)
         self.assertEqual(rundir.generation_deepjit(run), settings)
 
     def test_completed_resume_never_constructs_client(self):
