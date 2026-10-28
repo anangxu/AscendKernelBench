@@ -6,6 +6,8 @@ require exact equality. CPU-reference mode compares on host memory.
 
 from __future__ import annotations
 
+import os
+
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -48,6 +50,11 @@ def tensor_match(ref: Any, new: Any, *, atol: float, rtol: float) -> bool:
     if is_discrete_tensor(ref) and is_discrete_tensor(new):
         return bool(torch.equal(ref, new))
     try:
+        if os.environ.get("AKB_CASE_COMPARE_TASK"):
+            from .cases import compare_outputs
+
+            ok, _ = compare_outputs(ref, new, atol=atol, rtol=rtol)
+            return ok
         return bool(torch.allclose(ref, new, atol=atol, rtol=rtol))
     except RuntimeError:
         return False
