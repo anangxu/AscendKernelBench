@@ -562,9 +562,9 @@ def build_prompt(
 def case_contract(task: Task) -> str:
     """Return the multi-case contract block for a task that declares cases.
 
-    Only the contract is described: dtype set, epsilon variability, shape
-    summary, and the required semantics. Case test inputs and the reference
-    implementation stay out of the prompt.
+    The tested epsilon range and the dimension span come from the cases
+    themselves; the official support range and the default are stated once.
+    No case input and no reference implementation is included.
     """
     cases = getattr(task, "cases", ())
     if not cases:
@@ -572,28 +572,32 @@ def case_contract(task: Task) -> str:
     dtypes = sorted({dtype for case in cases for dtype in case.dtypes})
     epsilons = sorted({case.epsilon for case in cases})
     shapes = sorted({tuple(case.input_shapes[0]) for case in cases})
+    ranks = sorted({len(shape) for shape in shapes})
     shown = ", ".join(str(list(shape)) for shape in shapes[:3])
     more = "" if len(shapes) <= 3 else f" and {len(shapes) - 3} more shapes"
-    eps_text = (
-        f"epsilon varies between {min(epsilons):g} and {max(epsilons):g}"
-        if len(epsilons) > 1
-        else f"epsilon is {epsilons[0]:g}"
-    )
     return f"""
 
 ## Case Contract
 
-The same kernel is evaluated on every case below; do not specialize it for one
-shape, dtype, or epsilon, and do not hardcode a single value.
+The same kernel is evaluated on every case below. Dtype-specific dispatch,
+shape-dependent tiling, specialization, and tuning are all allowed; hardcoding
+one case, one shape, or one epsilon is not.
 
-- Inputs: x with shape (..., D) and gamma with shape (D,); both share one dtype.
-- Output: y has exactly the shape and dtype of x.
-- dtypes: {', '.join(dtypes)} (input dtype must be preserved).
-- Shapes: {shown}{more}.
-- {eps_text}; it is a runtime parameter of the reference, not a constant.
-- Normalize along the last dimension with the reference RMS definition and keep
-  its numeric precision, including how NaN and Inf propagate.
+- Inputs: x with shape (..., D) and gamma with shape (D,); x and gamma share one
+  dtype. The output y has exactly the shape and dtype of x.
+- dtypes: {', '.join(dtypes)}; the input dtype must be preserved.
+- Normalization runs over the last dimension; D is dynamic, not a fixed size.
+- Dimensions: {ranks[0]} to {ranks[-1]}; shapes may be non-aligned, e.g.
+  {shown}{more}.
+- epsilon is a runtime parameter: the task definition supports
+  {_OFFICIAL_EPS_RANGE} (default 1e-6), and the cases exercise
+  {min(epsilons):g} to {max(epsilons):g}. Do not hardcode a single value.
+- Follow the reference RMS definition and its numeric precision, including how
+  NaN and Inf propagate.
 """
+
+
+_OFFICIAL_EPS_RANGE = "1e-12 to 1"
 
 
 def system_prompt(
