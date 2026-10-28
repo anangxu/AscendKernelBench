@@ -522,6 +522,10 @@ class SampleEvaluator:
         )
         tensors = generate_inputs(spec, self.torch)
         self.get_inputs = lambda: list(tensors)
+        # Case tasks compare with the NaN-mask and Inf-sign rules.
+        import os
+
+        os.environ["AKB_CASE_COMPARE_TASK"] = "1"
         binder = self.ref_globals.get("bind_case")
         if callable(binder):
             binder(spec.epsilon)

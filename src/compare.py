@@ -7,7 +7,6 @@ require exact equality. CPU-reference mode compares on host memory.
 from __future__ import annotations
 
 import os
-
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
