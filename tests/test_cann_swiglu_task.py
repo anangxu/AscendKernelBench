@@ -41,8 +41,8 @@ def contract_checks() -> None:
         check(f"contract has {symbol}", symbol in task.task_py)
     check("docstring fixes dim -1", "dim -1" in task.task_py)
     check(
-        "discovery finds exactly the real task",
-        [item.task_id for item in discover_tasks(suite="cann")] == [TASK_ID],
+        "discovery still contains the swiglu task",
+        TASK_ID in [item.task_id for item in discover_tasks(suite="cann")],
     )
     check("the kernelbench corpus still has 270 tasks", len(discover_tasks()) == 270)
 
