@@ -164,7 +164,8 @@ def generate_inputs(case: CaseSpec, torch) -> list:
         else:
             base = torch.rand(shape, dtype=torch.float32) * 2.0 - 1.0
             tensor = base.to(dtype)
-            tensor = torch.where(base > 0.5, torch.full_like(tensor, float("inf")), tensor)
+            inf = torch.full_like(tensor, float("inf"))
+            tensor = torch.where(base > 0.5, inf, tensor)
             tensor = torch.where(base < -0.5, torch.full_like(tensor, float("-inf")), tensor)
         tensors.append(tensor)
     return tensors
