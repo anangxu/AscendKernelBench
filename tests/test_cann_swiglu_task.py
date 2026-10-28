@@ -96,7 +96,7 @@ def numerical_checks() -> None:
     check("silu(-5)*0 == 0", out[0, 1, 0].item() == 0.0)
     check("zero gate yields zero", torch.equal(out[0, 1, 1], torch.tensor(0.0)))
 
-    probe = torch.tensor([[[0.0, 1.0, -1.0, 10.0, 2.0, 3.0, 0.0, -5.0]]])
+    probe = torch.tensor([[[0.0, -1.0, 1.0, 10.0, 2.0, 3.0, 0.0, -5.0]]])
     with torch.no_grad():
         out = model(probe)
     a, b = probe[:, :, :4], probe[:, :, 4:]
