@@ -553,9 +553,47 @@ def build_prompt(
     examples: list[PromptExample] | None = None,
 ) -> str:
     """Assemble the generation prompt for one task and backend pair."""
-    return PromptBuilder(
+    prompt = PromptBuilder(
         task, hardware, backend=backend, build_backend=build_backend, examples=examples
     ).build(mode)
+    return prompt + case_contract(task)
+
+
+def case_contract(task: Task) -> str:
+    """Return the multi-case contract block for a task that declares cases.
+
+    Only the contract is described: dtype set, epsilon variability, shape
+    summary, and the required semantics. Case test inputs and the reference
+    implementation stay out of the prompt.
+    """
+    cases = getattr(task, "cases", ())
+    if not cases:
+        return ""
+    dtypes = sorted({dtype for case in cases for dtype in case.dtypes})
+    epsilons = sorted({case.epsilon for case in cases})
+    shapes = sorted({tuple(case.input_shapes[0]) for case in cases})
+    shown = ", ".join(str(list(shape)) for shape in shapes[:3])
+    more = "" if len(shapes) <= 3 else f" and {len(shapes) - 3} more shapes"
+    eps_text = (
+        f"epsilon varies between {min(epsilons):g} and {max(epsilons):g}"
+        if len(epsilons) > 1
+        else f"epsilon is {epsilons[0]:g}"
+    )
+    return f"""
+
+## Case Contract
+
+The same kernel is evaluated on every case below; do not specialize it for one
+shape, dtype, or epsilon, and do not hardcode a single value.
+
+- Inputs: x with shape (..., D) and gamma with shape (D,); both share one dtype.
+- Output: y has exactly the shape and dtype of x.
+- dtypes: {', '.join(dtypes)} (input dtype must be preserved).
+- Shapes: {shown}{more}.
+- {eps_text}; it is a runtime parameter of the reference, not a constant.
+- Normalize along the last dimension with the reference RMS definition and keep
+  its numeric precision, including how NaN and Inf propagate.
+"""
 
 
 def system_prompt(
