@@ -36,7 +36,13 @@ def suite_roots(roots: Mapping[str, Path] | None = None) -> dict[str, Path]:
     Returns:
         Mapping of suite id to its task root.
     """
+    import os
+
     resolved = dict(SUITE_ROOTS)
+    # Test fixtures may relocate the CANN root without touching the real corpus.
+    override = os.environ.get("AKB_CANN_ROOT", "")
+    if override:
+        resolved["cann"] = Path(override)
     if roots:
         resolved.update({name: Path(path) for name, path in roots.items()})
     return resolved
