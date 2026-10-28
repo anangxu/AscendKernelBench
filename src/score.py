@@ -42,6 +42,12 @@ def sample_speedup(sample: Mapping[str, Any]) -> float | None:
         return None
     if metadata.get("timing_valid") is False:
         return None
+    # A case task carries one validated task-level speedup instead of a single
+    # runtime pair; it is only present when every required case passed with a
+    # valid timing, so the same gates above still apply.
+    case_speedup = metadata.get("case_speedup")
+    if isinstance(case_speedup, (int, float)) and case_speedup > 0:
+        return float(case_speedup)
     runtime = sample.get("runtime")
     ref_runtime = sample.get("ref_runtime")
     if runtime and ref_runtime and runtime > 0:

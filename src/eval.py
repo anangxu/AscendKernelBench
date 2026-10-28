@@ -329,6 +329,7 @@ def _evaluate_cases(task, sample_path, *, hardware, config, backend, build_backe
             "runtime_seconds": (
             ),
             "speedup": perf["speedup"],
+            "case_speedup": perf["speedup"],
         },
     }
     rundir.write_eval_result(sample_path, task_result)
