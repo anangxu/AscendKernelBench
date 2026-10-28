@@ -1,0 +1,56 @@
+# Ascend 910B4 (Atlas A2 series) hardware profile.
+# Verified on the phase-2 host with torch.npu.get_device_properties(0) and
+# npu-smi 25.5.1: cube 20, vector 40, L2 96 MB, HBM 32 GB.
+name: ascend910b4
+soc_version: Ascend910B4
+cmake_arch: dav-2201
+ai_core_num: 20
+cube_core_num: 20
+vector_core_num: 40
+# UB per core is assumed equal to the 910B2 profile; not queried here.
+ub_size_kb: 192
+l2_cache_mb: 96
+hbm_gb: 32
+# Not measured on this host: inherited from the 910B2 profile, so the roofline
+# SOL score is indicative only.
+memory_bandwidth_gbps: 1600
+peak_tflops:
+  fp32: 47.0
+  fp16: 376.0
+  bf16: 188.0
+supported_dtypes: [fp16, fp32, bf16, int32, int64]
+api_style: |
+  - Kernel functions are annotated `__global__ __vector__` (vector core), NOT legacy `__aicore__`.
+  - Call `AscendC::InitSocState()` at kernel entry and `AscendC::PipeBarrier<PIPE_ALL>()` at exit.
+  - Allocate UB with `AscendC::LocalMemAllocator<AscendC::Hardware::UB>`, NOT legacy TPipe.
+  - Use `ascendc_assert` for device-side assertions.
+  - Use `AscendC::SetFlag<AscendC::HardEvent::...>` / `AscendC::WaitFlag<...>` for event sync.
+  - Use `AscendC::DataCopy` / `AscendC::DataCopyPad` for GM<->UB movement; tail blocks must be
+    handled safely (DataCopyPad or explicit tail tiling).
+
+  UB budgeting (mandatory):
+  - The UB budget is per AI core and must cover ALL live LocalTensor allocations
+    plus runtime overhead. Never allocate close to the full budget: keep total
+    UB usage <= 64 KB per core (the example uses 3 x 8 KB). Over-allocating UB
+    makes the kernel hang on device.
+
+  Pipeline safety (mandatory):
+  - Prefer separate UB buffers for inputs and outputs, as in the example.
+  - The copy-out (MTE3 pipe) must wait for the compute (V pipe) that produced
+    the data: after the compute call insert
+    `AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID0)` and put
+    `AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID0)` immediately
+    before the copy-out, otherwise the copy-out races the compute.
+  - If one UB buffer is reused across loop iterations by both copy-in (MTE2) and
+    copy-out (MTE3) — e.g. single-buffer in-place compute — you MUST insert
+    `AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID0)` after the copy-out
+    and `AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID0)` before the next
+    iteration's copy-in, otherwise the kernel deadlocks on device.
+
+  Compute APIs verified to exist in this CANN version (namespace AscendC, signature
+  `Op(dst, src[, src2], count)`; do NOT invent others such as `Dup`):
+  - Binary: Add, Sub, Mul, Div, Max, Min
+  - Scalar: Adds, Muls, Maxs, Mins
+  - Unary: Relu, LeakyRelu, Exp, Abs, Sqrt, Reciprocal
+  - Anything else (Tanh, Sigmoid, GELU, Log, Softmax...) must be composed from the
+    above (e.g. sigmoid(x) = 1 / (1 + Exp(-x)); relu(x) = Maxs(x, 0)).

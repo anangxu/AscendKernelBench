@@ -1,3 +1,3 @@
 source: cann-ops-nn
-source_revision: CANN 9.1.0 (aclnn swiglu family, activateLeft=true, unclipped)
+source_revision: CANN 9.1.0 aclnn_swi_glu.h (dim=-1, fp32, contiguous, half split)
 category: nn/activation
