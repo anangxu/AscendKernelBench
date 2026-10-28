@@ -240,12 +240,12 @@ def _check_recorded_task_meta(run_dir: Path, generation_config: dict) -> None:
         old = recorded.get(task_id)
         if not isinstance(old, dict):
             continue
-        old_hash, new_hash = old.get("task_hash"), entry.get("task_hash")
-        if old_hash and new_hash and old_hash != new_hash:
+        conflict = _provenance_conflict(old, entry)
+        if conflict:
             raise ValueError(
-                f"{run_dir} recorded task {task_id} with hash {old_hash[:12]}, "
-                f"but this request has {new_hash[:12]}; the task source changed. "
-                "Use a new run name or restore the source."
+                f"{run_dir} recorded task {task_id} with {conflict}, but this "
+                "request differs; the task source or its provenance changed. Use "
+                "a new run name or restore it."
             )
 
 
@@ -411,15 +411,32 @@ def recorded_task_meta(run_dir: Path) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+# Provenance fields that make a task re-usable. A change to any of them is
+# refused instead of silently evaluating different source.
+_PROVENANCE_IDENTITY = ("suite", "source", "source_revision", "task_hash")
+
+
+def _provenance_conflict(recorded: dict, current: dict) -> str | None:
+    """Return the first provenance field that changed, if any."""
+    for key in _PROVENANCE_IDENTITY:
+        old, new = recorded.get(key), current.get(key)
+        if old is None or new is None:
+            continue
+        if str(old) != str(new):
+            return f"{key} {str(old)[:24]!r} -> {str(new)[:24]!r}"
+    return None
+
+
 def verify_task_meta(run_dir: Path, tasks: list[Any]) -> None:
-    """Refuse a task whose recorded source no longer matches the corpus.
+    """Refuse a task whose recorded provenance no longer matches the corpus.
 
     Args:
         run_dir: Run directory that may record per-task provenance.
         tasks: Tasks about to be generated or evaluated.
 
     Raises:
-        ValueError: If a recorded hash differs from the current source.
+        ValueError: If the suite, source, source revision, or content hash
+            differs from the record.
     """
     recorded = recorded_task_meta(run_dir)
     if not recorded:
@@ -428,14 +445,12 @@ def verify_task_meta(run_dir: Path, tasks: list[Any]) -> None:
         entry = recorded.get(task.task_id)
         if not isinstance(entry, dict):
             continue
-        expected = entry.get("task_hash")
-        actual = task.provenance()["task_hash"]
-        if expected and expected != actual:
+        conflict = _provenance_conflict(entry, task.provenance())
+        if conflict:
             raise ValueError(
-                f"{run_dir} recorded task {task.task_id} with hash {expected[:12]}, "
-                f"but the current source hashes to {actual[:12]}; the task source "
-                "changed, so this run cannot be reused. Restore the source or use "
-                "a new run name."
+                f"{run_dir} recorded task {task.task_id} with {conflict}; the task "
+                "source or its provenance changed, so this run cannot be reused. "
+                "Restore it or use a new run name."
             )
 
 

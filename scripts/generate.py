@@ -15,6 +15,7 @@ from loguru import logger
 from rich.console import Console
 
 from src import rundir
+from src import suite as suite_module
 from src.backend import Backend
 from src.cli_util import (
     cli_progress,
@@ -79,7 +80,7 @@ def main() -> None:
     parser.add_argument(
         "--suite",
         default=None,
-        choices=["kernelbench", "cann"],
+        choices=list(suite_module.SUITE_IDS),
         help="task suite to discover when no --task or --tasks-file is given",
     )
     parser.add_argument(

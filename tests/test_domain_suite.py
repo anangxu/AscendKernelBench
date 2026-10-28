@@ -161,6 +161,58 @@ class CannSuiteTests(unittest.TestCase):
             self.assertIn("missing contract symbols", str(caught.exception))
 
 
+class SuitePathAndLegacyTests(unittest.TestCase):
+    """Nested ids, symlink escapes, and records written before provenance."""
+
+    def test_nested_cann_id_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cann"
+            nested = root / "nn" / "swiglu"
+            nested.mkdir(parents=True)
+            nested.joinpath("task.py").write_text(VALID_TASK, encoding="utf-8")
+            nested.joinpath("meta.yaml").write_text(
+                "source: ops-nn\nsource_revision: r1\ncategory: nn\n", encoding="utf-8"
+            )
+            task = load_task("cann/nn/swiglu", roots={"cann": root})
+            self.assertEqual(task.task_id, "cann/nn/swiglu")
+            self.assertEqual(task.name, "swiglu")
+            self.assertEqual(task.source, "ops-nn")
+            self.assertIsNone(task.level)
+            self.assertEqual(
+                [item.task_id for item in discover_tasks(suite="cann", roots={"cann": root})],
+                ["cann/nn/swiglu"],
+            )
+
+    def test_symlink_escape_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cann"
+            root.mkdir()
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            (outside / "task.py").write_text(VALID_TASK, encoding="utf-8")
+            (root / "link").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                load_task("cann/link", roots={"cann": root})
+
+    def test_legacy_record_without_provenance_still_works(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "legacy"
+            sample = run_dir / "level1" / "19_ReLU" / "sample_0"
+            sample.mkdir(parents=True)
+            (sample / "custom_op.asc").write_text("// kernel\n", encoding="utf-8")
+            (sample / "model_new.py").write_text("import torch\n", encoding="utf-8")
+            (run_dir / "generation_config.yaml").write_text(
+                "model: offline\nbackend: ascendc\ntasks:\n- level1/19_ReLU\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(rundir.recorded_task_meta(run_dir), {})
+            rundir.verify_task_meta(run_dir, [load_task("level1/19_ReLU")])
+            self.assertEqual(
+                [item[0] for item in rundir.iter_sample_dirs(run_dir)],
+                ["level1/19_ReLU"],
+            )
+
+
 class CannRunDirectoryTests(unittest.TestCase):
     """Runs, scanning, aggregation, and provenance live under the full id."""
 
@@ -238,6 +290,22 @@ class CannRunDirectoryTests(unittest.TestCase):
             rundir.verify_task_meta(run_dir, [changed])
         rundir.verify_task_meta(run_dir, [self.task])
 
+    def test_provenance_change_is_refused_even_with_the_same_source(self):
+        run_dir = self._run()
+        changed = self.task.__class__(**{**self.task.__dict__, "source_revision": "phase-2"})
+        with self.assertRaises(ValueError) as caught:
+            rundir.verify_task_meta(run_dir, [changed])
+        self.assertIn("source_revision", str(caught.exception))
+        stale = task_meta([changed])
+        record = generation_run_config(
+            self._settings(),
+            hardware_name=self.hardware.name,
+            task_ids=[FIXTURE_ID],
+            task_meta=stale,
+        )
+        with self.assertRaises(ValueError):
+            rundir.create_run("cann_run", record, resume=True)
+
     def test_generation_refuses_a_changed_source(self):
         self._run()
         stale = task_meta([self.task])
@@ -250,6 +318,40 @@ class CannRunDirectoryTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             rundir.create_run("cann_run", record, resume=True)
+
+    def test_mixed_run_scans_filters_and_aggregates_both_suites(self):
+        run_dir = self._run("mixed_run")
+        cann = rundir.sample_dir(run_dir, FIXTURE_ID, 0)
+        cann.mkdir(parents=True)
+        (cann / "custom_op.asc").write_text("// kernel\n", encoding="utf-8")
+        (cann / "model_new.py").write_text("import torch\n", encoding="utf-8")
+        (cann / "eval_result.json").write_text(
+            json.dumps({"correctness": True}), encoding="utf-8"
+        )
+        legacy = run_dir / "level1" / "19_ReLU" / "sample_0"
+        legacy.mkdir(parents=True)
+        (legacy / "custom_op.asc").write_text("// kernel\n", encoding="utf-8")
+        (legacy / "model_new.py").write_text("import torch\n", encoding="utf-8")
+        (legacy / "eval_result.json").write_text(
+            json.dumps({"correctness": True}), encoding="utf-8"
+        )
+        both = [item[0] for item in rundir.iter_sample_dirs(run_dir)]
+        self.assertEqual(both, [FIXTURE_ID, "level1/19_ReLU"])
+        self.assertEqual(
+            [item[0] for item in rundir.iter_sample_dirs(run_dir, suite="cann")],
+            [FIXTURE_ID],
+        )
+        self.assertEqual(
+            [item[0] for item in rundir.iter_sample_dirs(run_dir, suite="kernelbench")],
+            ["level1/19_ReLU"],
+        )
+        self.assertEqual(
+            [item[0] for item in rundir.iter_sample_dirs(run_dir, level=1)],
+            ["level1/19_ReLU"],
+        )
+        self.assertEqual(rundir.resolve_run_backend(run_dir).value, "ascendc")
+        results = rundir.collect_eval_results(run_dir)
+        self.assertEqual(sorted(results), sorted(["level1/19_ReLU", FIXTURE_ID]))
 
     def test_old_kernelbench_run_is_unaffected(self):
         legacy = self.runs / "legacy_kb"
