@@ -1,0 +1,3 @@
+source: cann-ops-nn
+source_revision: CANN 9.1.0 (aclnn swiglu family, activateLeft=true, unclipped)
+category: nn/activation

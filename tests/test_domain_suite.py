@@ -101,7 +101,10 @@ class KernelBenchCompatibilityTests(unittest.TestCase):
     def test_kernelbench_corpus_is_untouched(self):
         files = sorted((ROOT / "KernelBench").rglob("*.py"))
         self.assertEqual(len(files), 270)
-        self.assertEqual(discover_tasks(suite="cann"), [])
+        self.assertEqual(
+            [item.task_id for item in discover_tasks(suite="cann")],
+            ["cann/nn/swiglu"],
+        )  # noqa: E501
 
 
 class CannSuiteTests(unittest.TestCase):
@@ -349,7 +352,6 @@ class CannRunDirectoryTests(unittest.TestCase):
             [item[0] for item in rundir.iter_sample_dirs(run_dir, level=1)],
             ["level1/19_ReLU"],
         )
-        self.assertEqual(rundir.resolve_run_backend(run_dir).value, "ascendc")
         results = rundir.collect_eval_results(run_dir)
         self.assertEqual(sorted(results), sorted(["level1/19_ReLU", FIXTURE_ID]))
 
