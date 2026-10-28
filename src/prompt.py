@@ -587,7 +587,8 @@ one case, one shape, or one epsilon is not.
   dtype. The output y has exactly the shape and dtype of x.
 - dtypes: {', '.join(dtypes)}; the input dtype must be preserved.
 - Normalization runs over the last dimension; D is dynamic, not a fixed size.
-- Dimensions: {ranks[0]} to {ranks[-1]}; shapes may be non-aligned, e.g.
+- Dimensions: the task definition supports 2 to 8; the cases exercise
+  {ranks[0]} to {ranks[-1]}. Shapes may be non-aligned, e.g.
   {shown}{more}.
 - epsilon is a runtime parameter: the task definition supports
   {_OFFICIAL_EPS_RANGE} (default 1e-6), and the cases exercise
