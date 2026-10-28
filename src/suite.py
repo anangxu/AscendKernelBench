@@ -144,7 +144,7 @@ def task_metadata(directory: Path) -> dict[str, str]:
     """
     path = Path(directory) / "meta.yaml"
     if not path.is_file():
-        return {"source": "", "source_revision": "", "category": ""}
+        return {"source": "", "source_revision": "", "category": "", "cases": ""}
     import yaml
 
     try:
@@ -157,4 +157,5 @@ def task_metadata(directory: Path) -> dict[str, str]:
         "source": str(loaded.get("source", "")),
         "source_revision": str(loaded.get("source_revision", "")),
         "category": str(loaded.get("category", "")),
+        "cases": str(loaded.get("cases", "")),
     }

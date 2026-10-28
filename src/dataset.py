@@ -35,6 +35,7 @@ class Task:
     source_revision: str = ""
     task_hash: str = ""
     category: str = ""
+    cases: tuple = ()
 
     @property
     def problem_id(self) -> str:
@@ -119,6 +120,7 @@ def load_task(
     task_py = task_file.read_text(encoding="utf-8")
     _validate_contract(task_py, task_id)
     metadata = suite_module.task_metadata(task_file.parent)
+    cases = _load_task_cases(task_file.parent, metadata)
     match = TASK_ID_RE.match(rel_id) if suite_id == suite_module.DEFAULT_SUITE else None
     return Task(
         task_id=task_id,
@@ -131,6 +133,24 @@ def load_task(
         source_revision=metadata["source_revision"],
         category=metadata["category"],
         task_hash=suite_module.task_hash(task_py),
+        cases=cases,
+    )
+
+
+def _load_task_cases(directory: Path, metadata: dict[str, str]) -> tuple:
+    """Load the optional case file a task declares in its metadata."""
+    from . import cases as cases_module
+
+    declared = metadata.get("cases", "")
+    if not declared:
+        return ()
+    path = (directory / declared).resolve()
+    if directory.resolve() not in path.parents and path.parent != directory.resolve():
+        raise ValueError(f"{declared}: case file escapes the task directory")
+    return cases_module.load_cases(
+        path,
+        source_revision=metadata.get("source_revision", ""),
+        seed_base=0,
     )
 
 

@@ -1,0 +1,19 @@
+cases:
+- operator: Add
+  case_id: 1
+  input_shape:
+  - [16, 16]
+  - [16, 16]
+  dtype: [float32, float32]
+  attrs: {}
+  value_range: [-1, 1]
+  note: "small fp32 shape"
+- operator: Add
+  case_id: 2
+  input_shape:
+  - [8, 32]
+  - [8, 32]
+  dtype: [float32, float32]
+  attrs: {}
+  value_range: [-2, 2]
+  note: "second fp32 shape"

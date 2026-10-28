@@ -1,3 +1,4 @@
 source: test-fixture
 source_revision: phase-1
 category: elementwise
+cases: cases.yaml
