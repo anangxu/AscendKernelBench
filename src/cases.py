@@ -176,6 +176,73 @@ def generate_inputs(case: CaseSpec, torch) -> list:
     return tensors
 
 
+def compare_outputs(reference, candidate, *, atol: float, rtol: float):
+    """Compare a case output, matching NaN masks and Inf signs.
+
+    Finite elements compare within atol/rtol. A NaN in the reference must be a
+    NaN in the candidate at the same position, and a candidate NaN where the
+    reference is finite always fails. All-NaN outputs only pass when the
+    reference is all-NaN, so skipping every non-finite element cannot pass.
+
+    Returns:
+        (ok, detail) where detail explains the first failure class.
+    """
+    import torch
+
+    ref = reference.detach().to(torch.float32)
+    cand = candidate.detach().to(torch.float32)
+    if tuple(ref.shape) != tuple(cand.shape):
+        return False, f"shape {tuple(cand.shape)} != {tuple(ref.shape)}"
+    ref_nan = torch.isnan(ref)
+    cand_nan = torch.isnan(cand)
+    if bool((ref_nan != cand_nan).any()):
+        return False, "NaN mask mismatch"
+    finite = ~ref_nan & torch.isfinite(ref)
+    total = int(ref.numel())
+    if total == 0:
+        return False, "empty output"
+    if int(finite.sum()) == 0:
+        return bool(ref_nan.all() and cand_nan.all()), "all non-finite"
+    ref_f, cand_f = ref[finite], cand[finite]
+    ref_inf, cand_inf = torch.isinf(ref_f), torch.isinf(cand_f)
+    if bool((ref_inf != cand_inf).any()):
+        return False, "Inf position mismatch"
+    if bool(ref_inf.any()) and bool(
+        (torch.sign(ref_f[ref_inf]) != torch.sign(cand_f[cand_inf])).any()
+    ):
+        return False, "Inf sign mismatch"
+    keep = ~ref_inf
+    if bool(keep.any()) and not bool(
+        torch.allclose(ref_f[keep], cand_f[keep], rtol=rtol, atol=atol, equal_nan=False)
+    ):
+        return False, "finite values out of tolerance"
+    return True, f"{int(finite.sum())}/{total} finite compared"
+
+
+def aggregate_speedup(records: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Return the task-level speedup and the per-case diagnostics.
+
+    The formal speedup is the geometric mean of the per-case speedups, and only
+    when every case passed with a valid speedup. Otherwise it is None and the
+    collected values stay diagnostic.
+    """
+    import math
+
+    values: dict[int, float] = {}
+    for key, record in records.items():
+        if record.get("status") != "passed":
+            continue
+        speedup = (record.get("metadata") or {}).get("speedup")
+        if isinstance(speedup, (int, float)) and speedup > 0:
+            values[int(key)] = float(speedup)
+    expected = sum(1 for record in records.values() if record.get("status") == "passed")
+    valid = len(values) == len(records) and expected == len(records) and bool(values)
+    if not valid:
+        return {"speedup": None, "diagnostic_speedups": values}
+    mean = math.exp(sum(math.log(value) for value in values.values()) / len(values))
+    return {"speedup": mean, "diagnostic_speedups": values}
+
+
 def summarize(cases: tuple[CaseSpec, ...], statuses: Mapping[int, str]) -> CaseSummary:
     """Count one candidate's per-case outcomes.
 

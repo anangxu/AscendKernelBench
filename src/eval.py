@@ -277,7 +277,6 @@ def _evaluate_cases(task, sample_path, *, hardware, config, backend, build_backe
 
     statuses: dict[int, str] = {}
     records: dict[str, object] = {}
-    timings: list[float] = []
     for index, case in enumerate(task.cases):
         result = eval_sample(
             task, sample_path, hardware=hardware, config=config, backend=backend,
@@ -292,10 +291,6 @@ def _evaluate_cases(task, sample_path, *, hardware, config, backend, build_backe
             status = "error"
         statuses[case.case_id] = status
         metadata = dict(result.get("metadata") or {})
-        if status == "passed":
-            runtime = metadata.get("runtime_seconds")
-            if isinstance(runtime, (int, float)) and runtime > 0:
-                timings.append(float(runtime))
         records[str(case.case_id)] = {
             "case": case.record(), "status": status, "compiled": compiled,
             "correctness": result.get("correctness"), "metadata": metadata,
@@ -308,22 +303,32 @@ def _evaluate_cases(task, sample_path, *, hardware, config, backend, build_backe
     rundir.write_case_results(sample_path, payload)
     # A candidate counts once: the task-level record carries the case verdict so
     # eval_results, pass@k, fast_p, and the report see one sample.
+    ran = [record for record in records.values() if record.get("status") != "not_run"]
+    built = [record for record in ran if record.get("compiled")]
+    build_state = (
+        "build_failed" if ran and not built
+        else "built_no_case" if not ran
+        else "built_partial" if len(built) < len(ran)
+        else "built_all"
+    )
+    perf = cases_module.aggregate_speedup(records)
     task_result = {
-        "compiled": summary["cases_executed"] > 0,
+        "compiled": bool(built),
         "correctness": bool(summary["task_correct"]),
         "metadata": {
             "backend": backend.value,
             "build_backend": build_backend.value,
             "case_summary": summary,
             "cases": records,
+            "build_state": build_state,
+            "diagnostic_speedups": perf["diagnostic_speedups"],
             "timing_method": (
                 "npu_event" if backend.value == "ascendc" else "synchronized_wall"
             ),
             "timing_scope": "device" if backend.value == "ascendc" else "end_to_end",
             "runtime_seconds": (
-                min(timings) if timings and summary["task_correct"] else None
             ),
-            "speedup": None,
+            "speedup": perf["speedup"],
         },
     }
     rundir.write_eval_result(sample_path, task_result)

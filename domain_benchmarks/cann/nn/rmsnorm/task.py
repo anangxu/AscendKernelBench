@@ -10,6 +10,8 @@ import torch
 import torch.nn as nn
 
 EPS = 1e-6
+# The case adapter sets this module global to the case epsilon.
+CASE_EPS_GLOBAL = "EPS"
 SHAPE = (512, 1024)
 
 

@@ -522,8 +522,13 @@ class SampleEvaluator:
         )
         tensors = generate_inputs(spec, self.torch)
         self.get_inputs = lambda: list(tensors)
-        if "EPS" in self.ref_globals:
-            self.ref_globals["EPS"] = spec.epsilon
+        binder = self.ref_globals.get("bind_case")
+        if callable(binder):
+            binder(spec.epsilon)
+        else:
+            hook = self.ref_globals.get("CASE_EPS_GLOBAL")
+            if isinstance(hook, str) and hook in self.ref_globals:
+                self.ref_globals[hook] = spec.epsilon
 
     def _prepare_device(self) -> None:
         """Select the NPU, dtype, and constructor seed."""
