@@ -599,6 +599,10 @@ one case, one shape, or one epsilon is not.
 - epsilon is a runtime parameter: the task definition supports
   {_OFFICIAL_EPS_RANGE} (default 1e-6), and the cases exercise
   {min(epsilons):g} to {max(epsilons):g}. Do not hardcode a single value.
+- The output shape follows the operator definition, not `empty_like(x)`: reduce,
+  split, gather, and similar operators change shape, so size the output tensor
+  from the definition before launching.
+
 - Follow the reference RMS definition and its numeric precision, including how
   NaN and Inf propagate.
 
