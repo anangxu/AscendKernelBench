@@ -38,3 +38,27 @@
 
 Re-run `scripts/evaluate.py s4e_softmax --suite cann` and `s4e_gather` once the
 host answers, then read `case_results.json` for compiled/correctness/timing.
+
+## Round 9 probe (third consecutive round)
+
+Three SSH attempts at 10:49:00, 10:49:45, 10:50:30 all failed to connect, and the
+port probe returned nothing. The host has been unreachable across rounds 7, 8,
+and 9, which is three consecutive goal rounds.
+
+### Consequence for the objective
+
+- The two candidates that pass the static check (round-5 softmax and gather)
+  cannot be compiled, run, checked for correctness, or timed.
+- Without a correct candidate, no valid timing and no Speedup can exist, so the
+  remaining parts of the objective are blocked by an external condition, not by
+  unfinished work in the repository.
+
+### What is already done and committed
+
+- five generation rounds, twenty candidates, fourteen archived with hashes;
+- static checks: 14/20 passed; compile and NPU run: 2/20;
+- correctness: 0/20, each failure attributed to the model;
+- hidden-input legality: 60/60 baselines clean;
+- mutation detection: verified;
+- evaluator scores each task on its pinned baseline case;
+- tests 22/22 and Ruff clean at commit d1a8bc7 and later.
