@@ -29,8 +29,7 @@ def baseline_case(task_id: str, config: dict[str, Any], seed: int = 0) -> CaseSp
     return CaseSpec(
         case_id=seed,
         input_shapes=tuple(
-            tuple(shape) if shape is not None else None
-            for shape in config["shapes"]
+            tuple(shape) if shape is not None else None for shape in config["shapes"]
         ),
         dtypes=tuple(config["dtypes"]),
         attrs=dict(config.get("attrs") or {}),
@@ -45,7 +44,11 @@ def baseline_case(task_id: str, config: dict[str, Any], seed: int = 0) -> CaseSp
 
 
 def build_inputs(
-    task_id: str, config: dict[str, Any], torch, seed: int = 0, golden_path: Path | None = None
+    task_id: str,
+    config: dict[str, Any],
+    torch,
+    seed: int = 0,
+    golden_path: Path | None = None,
 ) -> list:
     """Generate the baseline inputs for a task and seed.
 
