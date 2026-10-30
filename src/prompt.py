@@ -595,6 +595,27 @@ one case, one shape, or one epsilon is not.
   {min(epsilons):g} to {max(epsilons):g}. Do not hardcode a single value.
 - Follow the reference RMS definition and its numeric precision, including how
   NaN and Inf propagate.
+
+Kernel entry signature (required so the AKB builder can parse and launch it):
+
+- Write the entry as a literal `__global__ __vector__ void <name>(...)`.
+- Pointer parameters must use explicit `__gm__ T*` types, for example
+  `__gm__ uint8_t*` or `__gm__ float*`, followed by plain scalars.
+- Never use `GM_ADDR` or another alias in the entry parameters.
+- Never make the entry itself a template; templated helpers are fine.
+- dtype dispatch, shape-dependent tiling, and tuning are still allowed.
+
+Minimal shape of a valid entry:
+
+```cpp
+__global__ __vector__ void example_entry(
+    __gm__ uint8_t* x,
+    __gm__ uint8_t* y,
+    uint32_t n)
+{
+    // kernel body
+}
+```
 """
 
 
