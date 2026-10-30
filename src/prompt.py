@@ -612,9 +612,9 @@ __global__ __vector__ void example_entry(
     __gm__ uint8_t* x,
     __gm__ uint8_t* y,
     uint32_t n)
-{
+{{
     // kernel body
-}
+}}
 ```
 """
 
