@@ -119,23 +119,45 @@ def load_cases(
         try:
             case_id = int(raw["case_id"])
             shapes = tuple(
-                tuple(int(item) for item in shape) for shape in raw["input_shape"]
+                None
+                if shape is None
+                else tuple(tuple(int(v) for v in inner) for inner in shape)
+                if shape and isinstance(shape[0], (list, tuple))
+                else tuple(int(item) for item in shape)
+                for shape in raw["input_shape"]
             )
-            dtypes = tuple(str(item) for item in raw["dtype"])
+            dtypes = tuple(
+                None
+                if item is None
+                else tuple(str(v) for v in item)
+                if isinstance(item, (list, tuple))
+                else str(item)
+                for item in raw["dtype"]
+            )
             attrs = dict(raw.get("attrs") or {})
             raw_range = raw.get("value_range", [0.0, 1.0])
-            if raw_range and isinstance(raw_range[0], (list, tuple)):
-                ranges = tuple((float(item[0]), float(item[1])) for item in raw_range)
-                if len(ranges) != len(raw["input_shape"]):
-                    raise ValueError(
-                        f"{path}: {len(ranges)} ranges for "
-                        f"{len(raw['input_shape'])} inputs"
-                    )
-                value_range = ranges
-                low, high = ranges[0]
+            if isinstance(raw_range, str):
+                # Semantic range such as "unique"; recorded, applied at generation.
+                value_range = (raw_range,)
+            elif raw_range and isinstance(raw_range[0], str):
+                parts = list(raw_range)
+                value_range = (tuple(parts),) if len(parts) > 1 else (str(parts[0]),)
+            elif raw_range and isinstance(raw_range[0], (list, tuple)):
+                parsed = []
+                for item in raw_range:
+                    if item is None:
+                        parsed.append(None)
+                    elif isinstance(item[0], str):
+                        parsed.append(
+                            tuple([str(item[0])] + [float(v) for v in item[1:]])
+                        )
+                    else:
+                        parsed.append((float(item[0]), float(item[1])))
+                value_range = tuple(parsed) + (None,) * (
+                    len(raw["input_shape"]) - len(parsed)
+                )
             else:
-                low, high = (float(item) for item in raw_range)
-                value_range = (low, high)
+                value_range = tuple(float(item) for item in raw_range)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"{path}: malformed case {raw!r}: {exc}") from exc
         specs.append(
