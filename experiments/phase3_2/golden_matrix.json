@@ -96,7 +96,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.013,
+  "seconds": 0.012,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -492,12 +492,44 @@
  {
   "task": "cann/auto/flash_attention_score_grad_enhance",
   "case": 9,
-  "input": "FAIL",
-  "golden": "BLOCKED",
-  "output": "BLOCKED",
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
   "device": "CPU",
-  "error": "RuntimeError: permute(sparse_coo): number of dimensions in the tensor input does not match the length of the desired ordering of dimensions i.e. input.dim() = 2",
-  "seconds": null
+  "error": "",
+  "seconds": 0.018,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1024,
+      4,
+      64
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1024,
+      4,
+      64
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1024,
+      4,
+      64
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
  },
  {
   "task": "cann/auto/fused_causal_conv1d",
@@ -507,7 +539,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.022,
+  "seconds": 0.026,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -540,7 +572,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.006,
+  "seconds": 0.007,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -676,7 +708,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.001,
+  "seconds": 0.003,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -731,7 +763,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.001,
+  "seconds": 0.002,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -766,7 +798,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.032,
+  "seconds": 0.048,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -826,12 +858,44 @@
  {
   "task": "cann/auto/lstm",
   "case": 11,
-  "input": "FAIL",
-  "golden": "BLOCKED",
-  "output": "BLOCKED",
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
   "device": "CPU",
-  "error": "TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'",
-  "seconds": null
+  "error": "",
+  "seconds": 0.004,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      8,
+      3,
+      32
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      3,
+      32
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      3,
+      32
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
  },
  {
   "task": "cann/auto/mhc_post_grad",
@@ -841,7 +905,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.001,
+  "seconds": 0.002,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -913,7 +977,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.156,
+  "seconds": 0.153,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -933,7 +997,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.079,
+  "seconds": 0.076,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -1020,12 +1084,46 @@
  {
   "task": "cann/auto/moe_re_routing",
   "case": 20,
-  "input": "FAIL",
-  "golden": "BLOCKED",
-  "output": "BLOCKED",
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
   "device": "CPU",
-  "error": "AssertionError: Sum of expert_token_num_per_rank (170) must equal A (64)",
-  "seconds": null
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      128
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64
+     ],
+     "dtype": "torch.int32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      4
+     ],
+     "dtype": "torch.int64"
+    }
+   ]
+  }
  },
  {
   "task": "cann/auto/nms",
@@ -1035,11 +1133,11 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.003,
+  "seconds": 0.002,
   "shape": {
    "kind": "tensor",
    "shape": [
-    412
+    121
    ],
    "dtype": "torch.int64"
   }
@@ -1088,7 +1186,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.018,
+  "seconds": 0.021,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -1103,12 +1201,19 @@
  {
   "task": "cann/auto/scatter",
   "case": 14,
-  "input": "FAIL",
-  "golden": "BLOCKED",
-  "output": "BLOCKED",
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
   "device": "CPU",
-  "error": "TypeError: scatter_() received an invalid combination of arguments - got (Tensor, Tensor, NoneType), but expected one of:\n * (int dim, Tensor index, Tensor src)",
-  "seconds": null
+  "error": "",
+  "seconds": 0.071,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1048583
+   ],
+   "dtype": "torch.float32"
+  }
  },
  {
   "task": "cann/auto/scatter_block_update",
@@ -1156,7 +1261,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.322,
+  "seconds": 0.336,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -1176,7 +1281,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.026,
+  "seconds": 0.019,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -1261,7 +1366,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.006,
+  "seconds": 0.005,
   "shape": {
    "kind": "tuple",
    "items": [
@@ -1316,7 +1421,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.036,
+  "seconds": 0.034,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -1351,7 +1456,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.005,
+  "seconds": 0.004,
   "shape": {
    "kind": "tensor",
    "shape": [
@@ -1389,7 +1494,7 @@
   "output": "PASS",
   "device": "CPU",
   "error": "",
-  "seconds": 0.0,
+  "seconds": 0.001,
   "shape": {
    "kind": "tensor",
    "shape": [

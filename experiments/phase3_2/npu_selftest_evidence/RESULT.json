@@ -1,0 +1,19 @@
+{
+  "source": "manual_framework_fixture",
+  "counts_as_llm_result": false,
+  "purpose": "prove one NPU execution path works: compile, run, compare, time",
+  "device": "Ascend 910B4 (NPU 2), CANN 9.1.0, driver 25.5.1",
+  "task": "cann/nn/swiglu",
+  "official_case": 15,
+  "shape": [512, 4096],
+  "dtype": "float32",
+  "compile": "PASS",
+  "run": "PASS",
+  "correct": true,
+  "max_diff": 9.5367431640625e-07,
+  "seconds_per_iteration": 2.702000141143799e-05,
+  "timing_valid": true,
+  "iterations": 20,
+  "library": "runs/s33_selftest/cann/nn/swiglu/sample_0/libcustom_op.so",
+  "note": "The 27us figure comes from 20 iterations with NPU events; it is not the 100-iteration retention protocol of the formal benchmark."
+}
