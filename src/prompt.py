@@ -596,6 +596,10 @@ one case, one shape, or one epsilon is not.
 - Follow the reference RMS definition and its numeric precision, including how
   NaN and Inf propagate.
 
+Case attributes (dim or similar) are published to your module as the global
+`CASE_ATTRS` before each forward call; read it to honor the per-case value
+instead of assuming a default.
+
 Kernel entry signature (required so the AKB builder can parse and launch it):
 
 - Write the entry as a literal `__global__ __vector__ void <name>(...)`.

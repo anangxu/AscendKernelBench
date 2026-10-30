@@ -125,9 +125,7 @@ def load_cases(
             attrs = dict(raw.get("attrs") or {})
             raw_range = raw.get("value_range", [0.0, 1.0])
             if raw_range and isinstance(raw_range[0], (list, tuple)):
-                ranges = tuple(
-                    (float(item[0]), float(item[1])) for item in raw_range
-                )
+                ranges = tuple((float(item[0]), float(item[1])) for item in raw_range)
                 if len(ranges) != len(raw["input_shape"]):
                     raise ValueError(
                         f"{path}: {len(ranges)} ranges for "
@@ -158,98 +156,44 @@ def load_cases(
 
 
 def generate_inputs(case: CaseSpec, torch) -> list:
-    """Build the case inputs from its shapes, dtypes, range, and seed.
+    """Build the case inputs from their shapes, dtypes, ranges, and seed.
 
-    The value range also encodes special values: an infinite range mixes
-    infinities with finite values, a NaN range fills NaN, and an all-zero range
-    stays zero. No dtype is widened: tensors keep the case dtype.
+    A case may carry one range per input or a single shared range. Integer
+    dtypes are generated as index-like values and are never widened to float.
+    A NaN or infinite range is materialized as those special values.
     """
     torch.manual_seed(case.seed)
     per_input = isinstance(case.value_range[0], (list, tuple))
-    ranges = list(case.value_range) if per_input else [tuple(case.value_range)] * len(
-        case.input_shapes
+    ranges = (
+        [tuple(span) for span in case.value_range]
+        if per_input
+        else [tuple(case.value_range)] * len(case.input_shapes)
     )
-    if math.isnan(low) or math.isnan(high):
-        values = [float("nan")]
-    elif math.isinf(low) or math.isinf(high):
-        values = [float("-inf"), float("inf"), 1.0, -1.0]
-    elif low == high:
-        values = [low]
-    else:
-        values = None
     tensors = []
     for shape, name, span in zip(case.input_shapes, case.dtypes, ranges):
         dtype = getattr(torch, name)
-        low, high = span
-        if dtype in (torch.int32, torch.int64, torch.int16, torch.int8, torch.bool):
-            # Integer inputs are index-like: stay inside a safe element range.
+        low, high = float(span[0]), float(span[1])
+        if dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.bool):
             upper = int(high) + 1 if high >= 0 else 1
-            tensors.append(
-                torch.randint(0, max(upper, 1), shape, dtype=dtype)
-            )
+            tensors.append(torch.randint(0, max(upper, 1), shape, dtype=dtype))
             continue
         if math.isnan(low) or math.isnan(high):
-            values = [float("nan")]
+            tensors.append(torch.full(shape, float("nan"), dtype=dtype))
         elif math.isinf(low) or math.isinf(high):
-            values = [float("-inf"), float("inf"), 1.0, -1.0]
-        elif low == high:
-            values = [low]
-        else:
-            values = None
-        if values is None:
-            tensor = torch.rand(shape, dtype=torch.float32) * (high - low) + low
-            tensor = tensor.to(dtype)
-        elif len(values) == 1:
-            tensor = torch.full(shape, values[0], dtype=dtype)
-        else:
-            base = torch.rand(shape, dtype=torch.float32) * 2.0 - 1.0
+            base = torch.rand(shape) * 2.0 - 1.0
             tensor = base.to(dtype)
-            inf = torch.full_like(tensor, float("inf"))
-            tensor = torch.where(base > 0.5, inf, tensor)
-            ninf = torch.full_like(tensor, float("-inf"))
-            tensor = torch.where(base < -0.5, ninf, tensor)
-        tensors.append(tensor)
+            tensor = torch.where(
+                base > 0.5, torch.full_like(tensor, float("inf")), tensor
+            )
+            tensor = torch.where(
+                base < -0.5, torch.full_like(tensor, float("-inf")), tensor
+            )
+            tensors.append(tensor)
+        elif low == high:
+            tensors.append(torch.full(shape, low, dtype=dtype))
+        else:
+            tensors.append((torch.rand(shape) * (high - low) + low).to(dtype))
     return tensors
-
-
-def compare_outputs(reference, candidate, *, atol: float, rtol: float):
-    """Compare a case output, matching NaN masks and Inf signs.
-
-    Finite elements compare within atol/rtol. A NaN in the reference must be a
-    NaN in the candidate at the same position, and a candidate NaN where the
-    reference is finite always fails. All-NaN outputs only pass when the
-    reference is all-NaN, so skipping every non-finite element cannot pass.
-
-    Returns:
-        (ok, detail) where detail explains the first failure class.
-    """
-    import torch
-
-    ref = reference.detach().to(torch.float32)
-    cand = candidate.detach().to(torch.float32)
-    if tuple(ref.shape) != tuple(cand.shape):
-        return False, f"shape {tuple(cand.shape)} != {tuple(ref.shape)}"
-    if ref.numel() == 0:
-        return False, "empty output"
-    ref_nan = torch.isnan(ref)
-    cand_nan = torch.isnan(cand)
-    if bool((ref_nan != cand_nan).any()):
-        return False, "NaN mask mismatch"
-    finite = ~ref_nan
-    if int(finite.sum()) == 0:
-        return True, "all non-finite and matching"
-    ref_f, cand_f = ref[finite], cand[finite]
-    ref_inf, cand_inf = torch.isinf(ref_f), torch.isinf(cand_f)
-    if bool((ref_inf != cand_inf).any()):
-        return False, "Inf position mismatch"
-    if bool(ref_inf.any()):
-        if bool((torch.sign(ref_f[ref_inf]) != torch.sign(cand_f[cand_inf])).any()):
-            return False, "Inf sign mismatch"
-    keep = ~ref_inf
-    if bool(keep.any()):
-        if not bool(torch.allclose(ref_f[keep], cand_f[keep], rtol=rtol, atol=atol)):
-            return False, "finite values out of tolerance"
-    return True, "ok"
 
 
 def aggregate_speedup(records: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
