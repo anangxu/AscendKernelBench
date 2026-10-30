@@ -494,6 +494,9 @@ class SampleEvaluator:
                 {"__file__": str(model_new_path)},
             )
             self.model_new_cls = custom_globals["ModelNew"]
+            if self.req.case:
+                # The candidate reads the same public global as the reference.
+                custom_globals["CASE_ATTRS"] = dict(self.req.case.get("attrs") or {})
         except Exception as exc:
             return fail_result(
                 compiled=self.compiled, runtime_error=f"module load failed: {exc!r}"

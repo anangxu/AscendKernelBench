@@ -113,7 +113,17 @@ def backward_compatibility() -> None:
     check("kernelbench still has 270 tasks", len(discover_tasks()) == 270)
     fixture = load_task("cann/fixture_add", roots={"cann": FIXTURE})
     check("fixture task carries two cases", len(fixture.cases) == 2)
-    check("suite has two real tasks", len(discover_tasks(suite="cann")) == 2)
+    check(
+        "suite holds the five official tasks",
+        [t.task_id for t in discover_tasks(suite="cann")]
+        == [
+            "cann/nn/apply_rotary_pos_emb",
+            "cann/nn/gather",
+            "cann/nn/rmsnorm",
+            "cann/nn/softmax",
+            "cann/nn/swiglu",
+        ],
+    )
 
 
 def main() -> int:

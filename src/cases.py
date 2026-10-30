@@ -23,7 +23,7 @@ class CaseSpec:
     input_shapes: tuple[tuple[int, ...], ...]
     dtypes: tuple[str, ...]
     attrs: Mapping[str, Any]
-    value_range: tuple[float, float]
+    value_range: tuple[float, float] | tuple[tuple[float, float], ...]
     seed: int = 0
     source_revision: str = ""
     note: str = ""
@@ -42,7 +42,12 @@ class CaseSpec:
             "input_shapes": [list(shape) for shape in self.input_shapes],
             "dtypes": list(self.dtypes),
             "attrs": dict(self.attrs),
-            "value_range": list(self.value_range),
+            "value_range": [
+                list(item) if isinstance(item, (list, tuple)) else item
+                for item in self.value_range
+            ]
+            if isinstance(self.value_range[0], (list, tuple))
+            else list(self.value_range),
             "seed": self.seed,
             "source_revision": self.source_revision,
             "required": self.required,
@@ -118,7 +123,21 @@ def load_cases(
             )
             dtypes = tuple(str(item) for item in raw["dtype"])
             attrs = dict(raw.get("attrs") or {})
-            low, high = (float(item) for item in raw.get("value_range", [0.0, 1.0]))
+            raw_range = raw.get("value_range", [0.0, 1.0])
+            if raw_range and isinstance(raw_range[0], (list, tuple)):
+                ranges = tuple(
+                    (float(item[0]), float(item[1])) for item in raw_range
+                )
+                if len(ranges) != len(raw["input_shape"]):
+                    raise ValueError(
+                        f"{path}: {len(ranges)} ranges for "
+                        f"{len(raw['input_shape'])} inputs"
+                    )
+                value_range = ranges
+                low, high = ranges[0]
+            else:
+                low, high = (float(item) for item in raw_range)
+                value_range = (low, high)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"{path}: malformed case {raw!r}: {exc}") from exc
         specs.append(
@@ -127,7 +146,7 @@ def load_cases(
                 input_shapes=shapes,
                 dtypes=dtypes,
                 attrs=attrs,
-                value_range=(low, high),
+                value_range=value_range,
                 seed=seed_base + case_id,
                 source_revision=source_revision,
                 note=str(raw.get("note", "")),
@@ -146,7 +165,10 @@ def generate_inputs(case: CaseSpec, torch) -> list:
     stays zero. No dtype is widened: tensors keep the case dtype.
     """
     torch.manual_seed(case.seed)
-    low, high = case.value_range
+    per_input = isinstance(case.value_range[0], (list, tuple))
+    ranges = list(case.value_range) if per_input else [tuple(case.value_range)] * len(
+        case.input_shapes
+    )
     if math.isnan(low) or math.isnan(high):
         values = [float("nan")]
     elif math.isinf(low) or math.isinf(high):
@@ -156,8 +178,24 @@ def generate_inputs(case: CaseSpec, torch) -> list:
     else:
         values = None
     tensors = []
-    for shape, name in zip(case.input_shapes, case.dtypes):
+    for shape, name, span in zip(case.input_shapes, case.dtypes, ranges):
         dtype = getattr(torch, name)
+        low, high = span
+        if dtype in (torch.int32, torch.int64, torch.int16, torch.int8, torch.bool):
+            # Integer inputs are index-like: stay inside a safe element range.
+            upper = int(high) + 1 if high >= 0 else 1
+            tensors.append(
+                torch.randint(0, max(upper, 1), shape, dtype=dtype)
+            )
+            continue
+        if math.isnan(low) or math.isnan(high):
+            values = [float("nan")]
+        elif math.isinf(low) or math.isinf(high):
+            values = [float("-inf"), float("inf"), 1.0, -1.0]
+        elif low == high:
+            values = [low]
+        else:
+            values = None
         if values is None:
             tensor = torch.rand(shape, dtype=torch.float32) * (high - low) + low
             tensor = tensor.to(dtype)

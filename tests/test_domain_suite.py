@@ -103,7 +103,13 @@ class KernelBenchCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(files), 270)
         self.assertEqual(
             [item.task_id for item in discover_tasks(suite="cann")],
-            ["cann/nn/rmsnorm", "cann/nn/swiglu"],
+            [
+                "cann/nn/apply_rotary_pos_emb",
+                "cann/nn/gather",
+                "cann/nn/rmsnorm",
+                "cann/nn/softmax",
+                "cann/nn/swiglu",
+            ],
         )
         self.assertEqual(
             sorted(
