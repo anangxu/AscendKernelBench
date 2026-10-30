@@ -1,3 +1,4 @@
 source: cann-ops-nn
-source_revision: CANN 9.1.0 aclnn_swi_glu.h (dim=-1, fp32, contiguous, half split)
-category: nn/activation
+source_revision: CANN Bench 2d7cd332247f33a66ca67c77d9f09d446a780dfe tasks/level1/swi_glu
+category: gated-activation
+cases: official/cases.yaml

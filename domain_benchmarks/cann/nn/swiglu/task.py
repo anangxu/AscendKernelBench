@@ -1,36 +1,37 @@
-"""SwiGLU activation with the official single-input half split.
+"""SwiGLU with the official single-input half split.
 
-Contract (restricted subset of the CANN 9.1.X swiglu family): one contiguous
-fp32 tensor of shape [512, 2048], dim -1, split into two halves along the last
-dimension, then y = silu(x[..., :1024]) * x[..., 1024:] with shape [512, 1024].
-FP16/BF16, other dims, other shapes, clipping, bias, and quantization are not
-part of this subset.
+Official semantics (CANN Bench): split the single input into two equal halves
+along dim, then y = silu(x0) * x1. The size along dim must be even.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-SPLIT_DIM = -1
-SHAPE = (512, 2048)
+def _case_dim(default: int = -1) -> int:
+    """Return the per-case dim attribute, defaulting when absent."""
+    attrs = globals().get("CASE_ATTRS") or {}
+    try:
+        return int(attrs.get("dim", default))
+    except (TypeError, ValueError):
+        return default
 
 
 class Model(nn.Module):
-    """Reference SwiGLU: split the last dim in half, silu the first half."""
+    """Official SwiGLU: split along dim, silu the first half, multiply."""
 
     def __init__(self):
         super().__init__()
 
     def forward(self, x):
-        half = x.shape[-1] // 2
-        gate = x.narrow(SPLIT_DIM, half, half)
-        activated = x.narrow(SPLIT_DIM, 0, half)
-        return F.silu(activated) * gate
+        dim = _case_dim()
+        half = x.shape[dim] // 2
+        return F.silu(x.narrow(dim, 0, half)) * x.narrow(dim, half, half)
 
 
 def get_inputs():
-    """Return the fixed-shape contiguous input."""
-    return [torch.randn(*SHAPE)]
+    """Return the default single input."""
+    return [torch.randn(512, 2048)]
 
 
 def get_init_inputs():

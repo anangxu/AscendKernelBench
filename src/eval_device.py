@@ -526,6 +526,9 @@ class SampleEvaluator:
         import os
 
         os.environ["AKB_CASE_COMPARE_TASK"] = "1"
+        # Per-case attributes reach the reference through a module global; the
+        # task reads them with its own accessor.
+        self.ref_globals["CASE_ATTRS"] = dict(spec.attrs)
         binder = self.ref_globals.get("bind_case")
         if callable(binder):
             binder(spec.epsilon)
