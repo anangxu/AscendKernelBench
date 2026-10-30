@@ -147,6 +147,15 @@ def load_cases(
                 for item in raw_range:
                     if item is None:
                         parsed.append(None)
+                    elif isinstance(item[0], (list, tuple)):
+                        parsed.append(
+                            tuple(
+                                (float(inner[0]), float(inner[1]))
+                                if not isinstance(inner[0], str)
+                                else tuple([str(inner[0])] + [float(v) for v in inner[1:]])
+                                for inner in item
+                            )
+                        )
                     elif isinstance(item[0], str):
                         parsed.append(
                             tuple([str(item[0])] + [float(v) for v in item[1:]])
@@ -177,6 +186,23 @@ def load_cases(
     return tuple(specs)
 
 
+def _semantic_tensor(spec, shape, name, torch):
+    """Build a tensor for a semantic range such as unique indices."""
+    kind = spec[0]
+    lo = int(spec[1]) if len(spec) > 1 else 0
+    hi = int(spec[2]) if len(spec) > 2 else lo + 1
+    if kind != "unique":
+        raise ValueError(f"unsupported value_range semantics: {kind}")
+    total = 1
+    for dim in shape:
+        total *= int(dim)
+    capacity = hi - lo + 1
+    if total > capacity:
+        raise ValueError(f"unique range {lo}..{hi} cannot fill {total} values")
+    values = torch.randperm(capacity)[:total] + lo
+    return values.reshape(tuple(int(v) for v in shape)).to(getattr(torch, name))
+
+
 def generate_inputs(case: CaseSpec, torch) -> list:
     """Build the case inputs from their shapes, dtypes, ranges, and seed.
 
@@ -185,14 +211,31 @@ def generate_inputs(case: CaseSpec, torch) -> list:
     A NaN or infinite range is materialized as those special values.
     """
     torch.manual_seed(case.seed)
-    per_input = isinstance(case.value_range[0], (list, tuple))
+    first = case.value_range[0] if case.value_range else None
+    per_input = not isinstance(first, (int, float))
     ranges = (
-        [tuple(span) for span in case.value_range]
+        [
+            span if span is None or isinstance(span, str) else tuple(span)
+            for span in case.value_range
+        ]
         if per_input
         else [tuple(case.value_range)] * len(case.input_shapes)
     )
     tensors = []
     for shape, name, span in zip(case.input_shapes, case.dtypes, ranges):
+        if shape is None or name is None:
+            # Optional input the official case marks absent.
+            tensors.append(None)
+            continue
+        if shape and isinstance(shape[0], (list, tuple)):
+            # TensorList input: one tensor per listed shape, order preserved.
+            tensors.append([torch.randn(*tuple(inner)) for inner in shape])
+            continue
+        if isinstance(span, tuple) and span and isinstance(span[0], str):
+            tensors.append(_semantic_tensor(span, shape, name, torch))
+            continue
+        if span is None:
+            span = (0.0, 1.0)
         dtype = getattr(torch, name)
         low, high = float(span[0]), float(span[1])
         if dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.bool):
