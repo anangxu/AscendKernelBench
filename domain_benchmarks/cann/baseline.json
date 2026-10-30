@@ -1,0 +1,2641 @@
+{
+ "source": "2d7cd332247f33a66ca67c77d9f09d446a780dfe",
+ "tasks": {
+  "cann/auto/add_rms_norm_dynamic_quant": {
+   "shapes": [
+    [
+     256,
+     256
+    ],
+    [
+     256,
+     256
+    ],
+    [
+     256
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "epsilon": 1e-06
+   },
+   "value_range": [
+    [
+     -500.0,
+     500.0
+    ],
+    [
+     -500.0,
+     500.0
+    ],
+    [
+     -4.0,
+     4.0
+    ]
+   ],
+   "origin": "official case 17"
+  },
+  "cann/auto/aggregate_hidden": {
+   "shapes": [
+    [
+     1,
+     1,
+     384
+    ],
+    [
+     3,
+     384
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ]
+   ],
+   "origin": "official case 1"
+  },
+  "cann/auto/aggregate_hidden_grad": {
+   "shapes": [
+    [
+     1,
+     1,
+     384
+    ],
+    [
+     1,
+     1,
+     384
+    ],
+    [
+     3,
+     384
+    ],
+    [
+     1,
+     1
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16",
+    "bool"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 18"
+  },
+  "cann/auto/arg_max": {
+   "shapes": [
+    [
+     2,
+     7,
+     256,
+     251
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "dim": 1
+   },
+   "value_range": [
+    -0.01,
+    0.01
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/attention_residual": {
+   "shapes": [
+    [
+     2,
+     1,
+     1,
+     4096
+    ],
+    [
+     1,
+     1,
+     4096
+    ],
+    [
+     4096
+    ],
+    [
+     4096
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16"
+   ],
+   "attrs": {
+    "alpha": 0.5,
+    "epsilon": 1e-06
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     0.5,
+     1.5
+    ]
+   ],
+   "origin": "official case 2"
+  },
+  "cann/auto/categorical_embedding_bag": {
+   "shapes": [
+    [
+     64,
+     6,
+     12
+    ],
+    [
+     80000,
+     64
+    ],
+    null
+   ],
+   "dtypes": [
+    "int64",
+    "float16",
+    null
+   ],
+   "attrs": {
+    "mean_pool": false,
+    "padding_idx": -1
+   },
+   "value_range": [
+    [
+     0.0,
+     79999.0
+    ],
+    [
+     -0.5,
+     0.5
+    ],
+    null
+   ],
+   "origin": "official case 6"
+  },
+  "cann/auto/compressed_sparse_attention_core": {
+   "shapes": [
+    [
+     1,
+     1,
+     1,
+     8
+    ],
+    [
+     1,
+     0,
+     8
+    ],
+    [
+     1,
+     1,
+     8
+    ],
+    [
+     1,
+     1,
+     1
+    ],
+    [
+     1
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32",
+    "int32",
+    "float32"
+   ],
+   "attrs": {
+    "query_start": 0,
+    "scaleValue": -1.0
+   },
+   "value_range": [
+    [
+     -0.3,
+     0.3
+    ],
+    [
+     -0.3,
+     0.3
+    ],
+    [
+     -0.3,
+     0.3
+    ],
+    [
+     -1.0,
+     -1.0
+    ],
+    [
+     -2.0,
+     2.0
+    ]
+   ],
+   "origin": "official case 5"
+  },
+  "cann/auto/conv_2d": {
+   "shapes": [
+    [
+     3,
+     7,
+     13,
+     13
+    ],
+    [
+     7,
+     7,
+     3,
+     3
+    ],
+    [
+     7
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "strides": [
+     1,
+     1
+    ],
+    "pads": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "dilations": [
+     1,
+     1
+    ]
+   },
+   "value_range": [
+    [
+     -0.5,
+     0.5
+    ],
+    [
+     -0.5,
+     0.5
+    ],
+    [
+     -0.05,
+     0.05
+    ]
+   ],
+   "origin": "official case 12"
+  },
+  "cann/auto/conv_3d_backprop_filter": {
+   "shapes": [
+    [
+     2,
+     11,
+     5,
+     13,
+     17
+    ],
+    [
+     2,
+     22,
+     5,
+     13,
+     17
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "strides": [
+     1,
+     1,
+     1
+    ],
+    "pads": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "dilations": [
+     1,
+     1,
+     1
+    ],
+    "groups": 1,
+    "filter_size": [
+     22,
+     11,
+     3,
+     3,
+     3
+    ]
+   },
+   "value_range": [
+    [
+     -2.0,
+     2.0
+    ],
+    [
+     -2.0,
+     2.0
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/cross_entropy_loss": {
+   "shapes": [
+    [
+     1009,
+     1021
+    ],
+    [
+     1009
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "int64"
+   ],
+   "attrs": {
+    "reduction": "mean",
+    "ignore_index": 0
+   },
+   "value_range": [
+    [
+     -1.0,
+     2.0
+    ],
+    [
+     0.0,
+     1020.0
+    ]
+   ],
+   "origin": "official case 7"
+  },
+  "cann/auto/cummin": {
+   "shapes": [
+    [
+     1000003
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "dim": -1
+   },
+   "value_range": [
+    -Infinity,
+    Infinity
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/depthwise_conv_2d": {
+   "shapes": [
+    [
+     3,
+     7,
+     13,
+     13
+    ],
+    [
+     7,
+     3,
+     3
+    ],
+    [
+     7
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "kernelSize": [
+     3,
+     3
+    ],
+    "stride": [
+     1,
+     1
+    ],
+    "padding": [
+     1,
+     1
+    ],
+    "dilation": [
+     1,
+     1
+    ],
+    "groups": 7
+   },
+   "value_range": [
+    [
+     -88.0,
+     88.0
+    ],
+    [
+     -88.0,
+     88.0
+    ],
+    [
+     -10.0,
+     10.0
+    ]
+   ],
+   "origin": "official case 12"
+  },
+  "cann/auto/dequant_swiglu_quant": {
+   "shapes": [
+    [
+     127,
+     1024
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "activate_left": false
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 5"
+  },
+  "cann/auto/dilation_2d": {
+   "shapes": [
+    [
+     2,
+     11,
+     13,
+     17
+    ],
+    [
+     3,
+     3,
+     17
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "strides": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "rates": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "padding_mode": "SAME",
+    "pads": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "ceil_mode": false,
+    "data_format": "NHWC"
+   },
+   "value_range": [
+    [
+     -6e-05,
+     6e-05
+    ],
+    [
+     -6e-05,
+     6e-05
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/dynamic_mx_quant": {
+   "shapes": [
+    [
+     3,
+     7,
+     11,
+     1022
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "axis": -1,
+    "round_mode": "rint",
+    "dst_type": 40,
+    "blocksize": 32
+   },
+   "value_range": [
+    -6.0,
+    6.0
+   ],
+   "origin": "official case 17"
+  },
+  "cann/auto/dynamic_quant": {
+   "shapes": [
+    [
+     2,
+     7,
+     256,
+     251
+    ]
+   ],
+   "dtypes": [
+    "float16"
+   ],
+   "attrs": {},
+   "value_range": [
+    -0.01,
+    0.01
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/embedding_hash_table_lookup_or_insert": {
+   "shapes": [
+    [
+     64
+    ],
+    [
+     64,
+     8
+    ],
+    [
+     16
+    ]
+   ],
+   "dtypes": [
+    "int64",
+    "float32",
+    "int64"
+   ],
+   "attrs": {
+    "bucket_size": 64,
+    "embedding_dim": 8
+   },
+   "value_range": [
+    [
+     -65536.0,
+     65535.0
+    ],
+    [
+     -2.0,
+     2.0
+    ],
+    [
+     0.0,
+     1023.0
+    ]
+   ],
+   "origin": "official case 12"
+  },
+  "cann/auto/engram_gate_fusion": {
+   "shapes": [
+    [
+     1,
+     4,
+     4,
+     256
+    ],
+    [
+     1,
+     4,
+     4,
+     256
+    ],
+    [
+     1,
+     4,
+     256
+    ],
+    [
+     4,
+     256
+    ],
+    [
+     4,
+     256
+    ],
+    [
+     4,
+     256
+    ],
+    [
+     1024,
+     1,
+     4
+    ],
+    null
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    null
+   ],
+   "attrs": {
+    "hc_mult": 4,
+    "hidden_size": 256,
+    "kernel_size": 4,
+    "dilation": 3,
+    "norm_eps": 1e-05
+   },
+   "value_range": [
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ],
+    null
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/exp": {
+   "shapes": [
+    [
+     1000007
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "base": -1.0,
+    "scale": 0.5,
+    "shift": 0.5
+   },
+   "value_range": [
+    -Infinity,
+    Infinity
+   ],
+   "origin": "official case 12"
+  },
+  "cann/auto/fft_conv": {
+   "shapes": [
+    [
+     2,
+     768,
+     1024
+    ],
+    [
+     768,
+     1024
+    ],
+    [
+     768
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -0.01,
+     0.01
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/flash_attention_score_grad_enhance": {
+   "shapes": [
+    [
+     1024,
+     4,
+     64
+    ],
+    [
+     1024,
+     4,
+     64
+    ],
+    [
+     1024,
+     4,
+     64
+    ],
+    [
+     1024,
+     4,
+     64
+    ],
+    null,
+    null,
+    null,
+    null
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16",
+    "float16",
+    null,
+    null,
+    null,
+    null
+   ],
+   "attrs": {
+    "head_num": 4,
+    "input_layout": "TND",
+    "scale": 0.07216878364870323,
+    "scale_value": 0.07216878364870323,
+    "keep_prob": 1.0,
+    "pre_tokens": 2147483647,
+    "next_tokens": 2147483647,
+    "sparse_mode": 0,
+    "sink_num": 0,
+    "actual_seq_qlen": [
+     256,
+     256,
+     256,
+     256
+    ],
+    "actual_seq_kvlen": [
+     256,
+     256,
+     256,
+     256
+    ]
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    null,
+    null,
+    null,
+    null
+   ],
+   "origin": "official case 9"
+  },
+  "cann/auto/fused_causal_conv1d": {
+   "shapes": [
+    [
+     1,
+     1,
+     2048
+    ],
+    [
+     4,
+     2048
+    ],
+    [
+     4,
+     3,
+     2048
+    ],
+    null,
+    [
+     1,
+     3
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    null,
+    "int32",
+    "int32",
+    "int32",
+    "int32",
+    "int32",
+    "int32"
+   ],
+   "attrs": {
+    "activation": "silu",
+    "block_size": 128,
+    "conv_mode": 0,
+    "inplace": true,
+    "max_query_len": 1,
+    "pad_slot_id": -1,
+    "residual_connection": 0,
+    "run_mode": 1
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    null,
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 17"
+  },
+  "cann/auto/gcd": {
+   "shapes": [
+    [
+     1023,
+     1024
+    ],
+    [
+     1,
+     1024
+    ]
+   ],
+   "dtypes": [
+    "int32",
+    "int32"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -10000.0,
+     10000.0
+    ],
+    [
+     -100.0,
+     100.0
+    ]
+   ],
+   "origin": "official case 11"
+  },
+  "cann/auto/gqa": {
+   "shapes": [
+    [
+     2,
+     128,
+     32,
+     128
+    ],
+    [
+     2,
+     128,
+     1,
+     128
+    ],
+    [
+     2,
+     128,
+     1,
+     128
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "scaleValue": -1.0,
+    "is_causal": false
+   },
+   "value_range": [
+    -1.0,
+    1.0
+   ],
+   "origin": "official case 18"
+  },
+  "cann/auto/grid_sampler_3d": {
+   "shapes": [
+    [
+     2,
+     11,
+     13,
+     17,
+     19
+    ],
+    [
+     2,
+     11,
+     13,
+     17,
+     3
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "interpolation_mode": "bilinear",
+    "padding_mode": "zeros",
+    "align_corners": false
+   },
+   "value_range": [
+    [
+     NaN,
+     NaN
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/grouped_matmul": {
+   "shapes": [
+    [
+     64,
+     32
+    ],
+    [
+     4,
+     32,
+     32
+    ],
+    [
+     4,
+     32
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "group_list": [
+     16,
+     32,
+     48,
+     64
+    ],
+    "split_item": 0,
+    "transpose_weight": true
+   },
+   "value_range": [
+    [
+     -8.0,
+     8.0
+    ],
+    [
+     -8.0,
+     8.0
+    ],
+    [
+     -64.0,
+     64.0
+    ]
+   ],
+   "origin": "official case 19"
+  },
+  "cann/auto/grouped_matmul_swiglu_quant": {
+   "shapes": [
+    [
+     64,
+     256
+    ],
+    [
+     2,
+     256,
+     512
+    ],
+    [
+     2,
+     512
+    ],
+    [
+     64
+    ]
+   ],
+   "dtypes": [
+    "int8",
+    "int8",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "group_list": [
+     32,
+     64
+    ]
+   },
+   "value_range": [
+    [
+     -128.0,
+     127.0
+    ],
+    [
+     -128.0,
+     127.0
+    ],
+    [
+     0.001,
+     0.01
+    ],
+    [
+     0.001,
+     0.01
+    ]
+   ],
+   "origin": "official case 12"
+  },
+  "cann/auto/image_resize_normalize": {
+   "shapes": [
+    [
+     1,
+     1,
+     224,
+     256
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "out_h": 225,
+    "out_w": 224,
+    "align_corners": false
+   },
+   "value_range": [
+    [
+     0.0,
+     255.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.1,
+     2.0
+    ]
+   ],
+   "origin": "official case 2"
+  },
+  "cann/auto/kimi_delta_attention": {
+   "shapes": [
+    [
+     1,
+     1,
+     1,
+     4
+    ],
+    [
+     1,
+     1,
+     1,
+     4
+    ],
+    [
+     1,
+     1,
+     1,
+     3
+    ],
+    [
+     1,
+     1,
+     1,
+     4
+    ],
+    [
+     1,
+     1,
+     1
+    ],
+    [
+     1,
+     1,
+     4,
+     3
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "use_qk_l2norm": false,
+    "scaleValue": -1.0
+   },
+   "value_range": [
+    [
+     -0.05,
+     0.05
+    ],
+    [
+     -0.05,
+     0.05
+    ],
+    [
+     -0.2,
+     0.2
+    ],
+    [
+     -0.4,
+     -0.01
+    ],
+    [
+     0.2,
+     0.8
+    ],
+    [
+     -0.2,
+     0.2
+    ]
+   ],
+   "origin": "official case 5"
+  },
+  "cann/auto/kv_cache_append": {
+   "shapes": [
+    [
+     32,
+     16,
+     1,
+     32
+    ],
+    [
+     32,
+     16,
+     1,
+     32
+    ],
+    [
+     8,
+     1,
+     32
+    ],
+    [
+     8,
+     1,
+     32
+    ],
+    [
+     8
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16",
+    "float16",
+    "int64"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -0.25,
+     0.25
+    ],
+    [
+     -0.25,
+     0.25
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     0.0,
+     511.0
+    ]
+   ],
+   "origin": "official case 10"
+  },
+  "cann/auto/lact_ttt_chunk": {
+   "shapes": [
+    [
+     1,
+     2048,
+     8,
+     128
+    ],
+    [
+     1,
+     2048,
+     8,
+     128
+    ],
+    [
+     1,
+     2048,
+     8,
+     128
+    ],
+    [
+     1,
+     8,
+     256,
+     128
+    ],
+    [
+     1,
+     8,
+     128,
+     256
+    ],
+    [
+     1,
+     8,
+     256,
+     128
+    ],
+    [
+     1,
+     2048,
+     8
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "chunk_size": 512,
+    "use_muon": false,
+    "update_first": false
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     0.001,
+     0.05
+    ]
+   ],
+   "origin": "official case 16"
+  },
+  "cann/auto/lstm": {
+   "shapes": [
+    [
+     8,
+     3,
+     64
+    ],
+    [
+     [
+      128,
+      64
+     ]
+    ],
+    [
+     [
+      128,
+      32
+     ]
+    ],
+    null,
+    null,
+    null,
+    null
+   ],
+   "dtypes": [
+    "float32",
+    [
+     "float32"
+    ],
+    [
+     "float32"
+    ],
+    null,
+    null,
+    null,
+    null
+   ],
+   "attrs": {
+    "inputSize": 64,
+    "hiddenSize": 32,
+    "numLayers": 1,
+    "bias": false,
+    "batchFirst": false,
+    "dropout": 0.0,
+    "bidirectional": false,
+    "projSize": 0
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     [
+      -0.1,
+      0.1
+     ]
+    ],
+    [
+     [
+      -0.1,
+      0.1
+     ]
+    ],
+    null,
+    null,
+    null,
+    null
+   ],
+   "origin": "official case 11"
+  },
+  "cann/auto/mhc_post_grad": {
+   "shapes": [
+    [
+     1,
+     8,
+     4,
+     384
+    ],
+    [
+     1,
+     8,
+     4,
+     384
+    ],
+    [
+     1,
+     8,
+     4,
+     4
+    ],
+    [
+     1,
+     8,
+     384
+    ],
+    [
+     1,
+     8,
+     4
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float32",
+    "float16",
+    "float32"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ],
+    [
+     -3.0,
+     3.0
+    ]
+   ],
+   "origin": "official case 5"
+  },
+  "cann/auto/mhc_sinkhorn": {
+   "shapes": [
+    [
+     1,
+     2,
+     2
+    ]
+   ],
+   "dtypes": [
+    "float32"
+   ],
+   "attrs": {
+    "iter_step": 20,
+    "eps": 1e-06
+   },
+   "value_range": [
+    -1.0,
+    1.0
+   ],
+   "origin": "official case 18"
+  },
+  "cann/auto/mla": {
+   "shapes": [
+    [
+     1,
+     1,
+     128,
+     512
+    ],
+    [
+     1,
+     1,
+     128,
+     64
+    ],
+    [
+     1,
+     2048,
+     1,
+     512
+    ],
+    [
+     1,
+     2048,
+     1,
+     64
+    ],
+    [
+     1,
+     2048,
+     1,
+     512
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "numKVHeads": 1,
+    "scaleValue": -1.0,
+    "inputLayout": "BSND",
+    "is_causal": false
+   },
+   "value_range": [
+    -1.0,
+    1.0
+   ],
+   "origin": "official case 7"
+  },
+  "cann/auto/mla_prolog": {
+   "shapes": [
+    [
+     64,
+     1,
+     7168
+    ],
+    [
+     7168,
+     1536
+    ],
+    [
+     1536,
+     12288
+    ],
+    [
+     64,
+     128,
+     512
+    ],
+    [
+     7168,
+     576
+    ],
+    [
+     1536
+    ],
+    [
+     512
+    ],
+    [
+     64,
+     1,
+     64
+    ],
+    [
+     64,
+     1,
+     64
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16"
+   ],
+   "attrs": {
+    "n_heads": 64,
+    "rmsnorm_epsilon_cq": 1e-05,
+    "rmsnorm_epsilon_ckv": 1e-05
+   },
+   "value_range": [
+    -1.0,
+    1.0
+   ],
+   "origin": "official case 4"
+  },
+  "cann/auto/moe_gating_top_k_softmax": {
+   "shapes": [
+    [
+     64,
+     8
+    ]
+   ],
+   "dtypes": [
+    "float16"
+   ],
+   "attrs": {
+    "k": 2
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/moe_re_routing": {
+   "shapes": [
+    [
+     64,
+     128
+    ],
+    [
+     4,
+     4
+    ],
+    [
+     64
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "int32",
+    "float32"
+   ],
+   "attrs": {
+    "expert_token_num_type": 1,
+    "idx_type": 0
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     1.0,
+     16.0
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 20"
+  },
+  "cann/auto/nms": {
+   "shapes": [
+    [
+     511,
+     4
+    ],
+    [
+     511
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "iou_threshold": 0.2
+   },
+   "value_range": [
+    [
+     -0.5,
+     0.5
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 16"
+  },
+  "cann/auto/q4_0_dequant_matmul": {
+   "shapes": [
+    [
+     16,
+     32
+    ],
+    [
+     2048
+    ],
+    [
+     128,
+     1
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "uint8",
+    "float16"
+   ],
+   "attrs": {
+    "out_features": 128,
+    "in_features": 32,
+    "block_size": 32,
+    "quant_type": "q4_0"
+   },
+   "value_range": [
+    [
+     -0.5,
+     0.5
+    ],
+    [
+     0.0,
+     255.0
+    ],
+    [
+     0.01,
+     0.08
+    ]
+   ],
+   "origin": "official case 6"
+  },
+  "cann/auto/quant_matmul": {
+   "shapes": [
+    [
+     32,
+     256
+    ],
+    [
+     256,
+     512
+    ],
+    [
+     512
+    ]
+   ],
+   "dtypes": [
+    "int8",
+    "int8",
+    "float32"
+   ],
+   "attrs": {
+    "output_dtype": "float16"
+   },
+   "value_range": [
+    [
+     -128.0,
+     127.0
+    ],
+    [
+     -128.0,
+     127.0
+    ],
+    [
+     0.001,
+     0.01
+    ]
+   ],
+   "origin": "official case 18"
+  },
+  "cann/auto/roi_align": {
+   "shapes": [
+    [
+     2,
+     127,
+     31,
+     33
+    ],
+    [
+     50,
+     5
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "outputHeight": 7,
+    "outputWidth": 7,
+    "spatial_scale": 0.0625,
+    "sampling_ratio": 2,
+    "aligned": false
+   },
+   "value_range": [
+    [
+     -6e-05,
+     6e-05
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/scatter": {
+   "shapes": [
+    [
+     1048583
+    ],
+    [
+     1048
+    ],
+    [
+     1048
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "int32",
+    "float32"
+   ],
+   "attrs": {
+    "dim": 0,
+    "reduce": null
+   },
+   "value_range": [
+    [
+     -Infinity,
+     Infinity
+    ],
+    [
+     "unique",
+     0.0,
+     1048582.0
+    ],
+    [
+     -Infinity,
+     Infinity
+    ]
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/scatter_block_update": {
+   "shapes": [
+    [
+     64,
+     8,
+     256
+    ],
+    [
+     8,
+     2
+    ],
+    [
+     8,
+     256
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "int32",
+    "bfloat16"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -5.0,
+     5.0
+    ],
+    [
+     0.0,
+     7.0
+    ],
+    [
+     -5.0,
+     5.0
+    ]
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/selective_scan": {
+   "shapes": [
+    [
+     1,
+     512,
+     768
+    ],
+    [
+     1,
+     512,
+     768
+    ],
+    [
+     768,
+     16
+    ],
+    [
+     1,
+     512,
+     16
+    ],
+    [
+     1,
+     512,
+     16
+    ],
+    [
+     768
+    ],
+    [
+     1,
+     512,
+     768
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "bfloat16"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     0.001,
+     0.1
+    ],
+    [
+     -1.0,
+     -0.01
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 1"
+  },
+  "cann/auto/sparse_flash_attention": {
+   "shapes": [
+    [
+     4,
+     64,
+     1,
+     576
+    ],
+    [
+     4,
+     1,
+     2048,
+     576
+    ],
+    [
+     4,
+     1,
+     2048,
+     512
+    ],
+    [
+     4,
+     1,
+     1,
+     256
+    ]
+   ],
+   "dtypes": [
+    "bfloat16",
+    "bfloat16",
+    "bfloat16",
+    "int32"
+   ],
+   "attrs": {
+    "scaleValue": 0.04167,
+    "inputLayout": "BNSD",
+    "is_causal": false
+   },
+   "value_range": [
+    -1.0,
+    1.0
+   ],
+   "origin": "official case 15"
+  },
+  "cann/auto/sparse_lightning_indexer_grad_kl_loss_enhance": {
+   "shapes": [
+    [
+     64,
+     32,
+     512
+    ],
+    [
+     256,
+     1,
+     512
+    ],
+    [
+     64,
+     16,
+     128
+    ],
+    [
+     256,
+     1,
+     128
+    ],
+    [
+     64,
+     16
+    ],
+    [
+     64,
+     1,
+     128
+    ],
+    [
+     1,
+     64,
+     32
+    ],
+    [
+     1,
+     64,
+     32
+    ],
+    [
+     64,
+     32,
+     64
+    ],
+    [
+     256,
+     1,
+     64
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16",
+    "float16",
+    "float16",
+    "float16",
+    "int32",
+    "float32",
+    "float32",
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "scale_value": 0.04166666666666666,
+    "layout": "TND",
+    "actual_seq_lengths_query": [
+     64
+    ],
+    "actual_seq_lengths_key": [
+     256
+    ],
+    "sparse_mode": 3,
+    "sparse_block_size": 1,
+    "deterministic": true
+   },
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     255.0
+    ],
+    [
+     0.0,
+     100.0
+    ],
+    [
+     -10.0,
+     10.0
+    ],
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 2"
+  },
+  "cann/auto/strided_slice": {
+   "shapes": [
+    [
+     512,
+     512
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "begin": [
+     0,
+     0
+    ],
+    "end": [
+     512,
+     512
+    ],
+    "strides": [
+     1,
+     1
+    ],
+    "new_axis_mask": 1
+   },
+   "value_range": [
+    -3.0,
+    3.0
+   ],
+   "origin": "official case 16"
+  },
+  "cann/auto/tensor_program_vm": {
+   "shapes": [
+    [
+     64,
+     4
+    ],
+    [
+     8,
+     256
+    ]
+   ],
+   "dtypes": [
+    "int32",
+    "float16"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     0.0,
+     1073741823.0
+    ],
+    [
+     -1.0,
+     1.0
+    ]
+   ],
+   "origin": "official case 16"
+  },
+  "cann/auto/top_k": {
+   "shapes": [
+    [
+     2,
+     7,
+     256,
+     256
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "k": 7,
+    "dim": 1,
+    "largest": false
+   },
+   "value_range": [
+    -0.01,
+    0.01
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/transpose": {
+   "shapes": [
+    [
+     2,
+     511,
+     7,
+     127
+    ]
+   ],
+   "dtypes": [
+    "float32"
+   ],
+   "attrs": {
+    "perm": [
+     0,
+     2,
+     1,
+     3
+    ]
+   },
+   "value_range": [
+    -10000.0,
+    10000.0
+   ],
+   "origin": "official case 14"
+  },
+  "cann/auto/unique": {
+   "shapes": [
+    [
+     2,
+     7,
+     256,
+     256
+    ]
+   ],
+   "dtypes": [
+    "bfloat16"
+   ],
+   "attrs": {
+    "return_inverse": false
+   },
+   "value_range": [
+    -0.01,
+    0.01
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/unsorted_segment_sum": {
+   "shapes": [
+    [
+     1009,
+     1021
+    ],
+    [
+     1009
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "int32"
+   ],
+   "attrs": {
+    "num_segments": 1009
+   },
+   "value_range": [
+    [
+     -1.0,
+     2.0
+    ],
+    [
+     0.0,
+     1008.0
+    ]
+   ],
+   "origin": "official case 7"
+  },
+  "cann/auto/weight_quant_batch_matmul": {
+   "shapes": [
+    [
+     1,
+     2048
+    ],
+    [
+     2048,
+     1408
+    ],
+    [
+     1408
+    ],
+    [
+     1408
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "int8",
+    "float16",
+    "float16"
+   ],
+   "attrs": {},
+   "value_range": [
+    [
+     -1.0,
+     1.0
+    ],
+    [
+     -128.0,
+     127.0
+    ],
+    [
+     0.001,
+     0.1
+    ],
+    [
+     -0.1,
+     0.1
+    ]
+   ],
+   "origin": "official case 4"
+  },
+  "cann/nn/rmsnorm": {
+   "shapes": [
+    [
+     11,
+     13,
+     17,
+     67
+    ],
+    [
+     67
+    ]
+   ],
+   "dtypes": [
+    "float16",
+    "float16"
+   ],
+   "attrs": {
+    "epsilon": 1e-08
+   },
+   "value_range": [
+    NaN,
+    NaN
+   ],
+   "origin": "official case 16"
+  },
+  "cann/nn/swiglu": {
+   "shapes": [
+    [
+     11,
+     13,
+     16,
+     67
+    ]
+   ],
+   "dtypes": [
+    "float32"
+   ],
+   "attrs": {
+    "dim": 2
+   },
+   "value_range": [
+    NaN,
+    NaN
+   ],
+   "origin": "official case 13"
+  },
+  "cann/nn/softmax": {
+   "shapes": [
+    [
+     1009,
+     1021
+    ]
+   ],
+   "dtypes": [
+    "float16"
+   ],
+   "attrs": {
+    "dim": -1
+   },
+   "value_range": [
+    -1.0,
+    2.0
+   ],
+   "origin": "official case 10"
+  },
+  "cann/nn/gather": {
+   "shapes": [
+    [
+     1000003
+    ],
+    [
+     1000
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "int64"
+   ],
+   "attrs": {
+    "dim": 0
+   },
+   "value_range": [
+    [
+     -Infinity,
+     Infinity
+    ],
+    [
+     0.0,
+     1000002.0
+    ]
+   ],
+   "origin": "official case 13"
+  },
+  "cann/auto/linear_cross_entropy": {
+   "shapes": [
+    [
+     64,
+     512
+    ],
+    [
+     1024,
+     512
+    ],
+    [
+     64
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "int32"
+   ],
+   "attrs": {
+    "reduction": "mean",
+    "ignore_index": -100
+   },
+   "value_range": [
+    [
+     -1,
+     1
+    ],
+    [
+     -1,
+     1
+    ],
+    [
+     0,
+     1023
+    ]
+   ],
+   "origin": "AKB smoke baseline (official cases exceed the input budget)"
+  },
+  "cann/nn/apply_rotary_pos_emb": {
+   "shapes": [
+    [
+     2,
+     16,
+     4,
+     64
+    ],
+    [
+     2,
+     16,
+     4,
+     64
+    ],
+    [
+     16,
+     64
+    ],
+    [
+     16,
+     64
+    ]
+   ],
+   "dtypes": [
+    "float32",
+    "float32",
+    "float32",
+    "float32"
+   ],
+   "attrs": {
+    "layout": 0,
+    "rotaryMode": "half"
+   },
+   "value_range": [
+    [
+     -1,
+     1
+    ],
+    [
+     -1,
+     1
+    ],
+    [
+     -1,
+     1
+    ],
+    [
+     -1,
+     1
+    ]
+   ],
+   "origin": "AKB custom baseline; cos/sin sized (S, D) to broadcast with head_dim"
+  }
+ }
+}
