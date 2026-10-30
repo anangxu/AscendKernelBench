@@ -159,9 +159,14 @@ def load_cases(
                             )
                         )
                     elif isinstance(item[0], str):
-                        parsed.append(
-                            tuple([str(item[0])] + [float(v) for v in item[1:]])
-                        )
+                        try:
+                            parsed.append(
+                                (float(item[0]), float(item[1]))
+                            )
+                        except ValueError:
+                            parsed.append(
+                                tuple([str(item[0])] + [float(v) for v in item[1:]])
+                            )
                     else:
                         parsed.append((float(item[0]), float(item[1])))
                 value_range = tuple(parsed) + (None,) * (
@@ -191,8 +196,12 @@ def load_cases(
 def _semantic_tensor(spec, shape, name, torch):
     """Build a tensor for a semantic range such as unique indices."""
     kind = spec[0]
-    lo = int(spec[1]) if len(spec) > 1 else 0
-    hi = int(spec[2]) if len(spec) > 2 else lo + 1
+    bounds = [float(v) for v in spec[1:]] if len(spec) > 1 else [0.0, 1.0]
+    if len(bounds) < 2:
+        bounds.append(bounds[0] + 1.0)
+    if not all(math.isfinite(v) for v in bounds):
+        raise ValueError(f"non-finite bounds in value_range semantics {spec!r}")
+    lo, hi = int(bounds[0]), int(bounds[1])
     if kind != "unique":
         raise ValueError(f"unsupported value_range semantics: {kind}")
     total = 1

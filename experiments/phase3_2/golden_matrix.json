@@ -1,0 +1,1449 @@
+[
+ {
+  "task": "cann/auto/add_rms_norm_dynamic_quant",
+  "case": 17,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      256,
+      256
+     ],
+     "dtype": "torch.int8"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      256,
+      256
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      256
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/aggregate_hidden",
+  "case": 1,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.005,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1,
+    384
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/aggregate_hidden_grad",
+  "case": 18,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      1,
+      384
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      3,
+      384
+     ],
+     "dtype": "torch.float16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/arg_max",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.013,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    256,
+    251
+   ],
+   "dtype": "torch.int64"
+  }
+ },
+ {
+  "task": "cann/auto/attention_residual",
+  "case": 2,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1,
+    4096
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/categorical_embedding_bag",
+  "case": 6,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.012,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    64,
+    6,
+    64
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/compressed_sparse_attention_core",
+  "case": 5,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1,
+    1,
+    8
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/conv_2d",
+  "case": 12,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    3,
+    7,
+    13,
+    13
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/conv_3d_backprop_filter",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    22,
+    11,
+    3,
+    3,
+    3
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/cross_entropy_loss",
+  "case": 7,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tensor",
+   "shape": [],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/cummin",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.005,
+  "shape": {
+   "kind": "cummin",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1000003
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1000003
+     ],
+     "dtype": "torch.int64"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/depthwise_conv_2d",
+  "case": 12,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    3,
+    7,
+    13,
+    13
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/dequant_swiglu_quant",
+  "case": 5,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      127,
+      512
+     ],
+     "dtype": "torch.int8"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      127
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/dilation_2d",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    11,
+    13,
+    17
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/dynamic_mx_quant",
+  "case": 17,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.004,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      3,
+      7,
+      11,
+      511
+     ],
+     "dtype": "torch.uint8"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      3,
+      7,
+      11,
+      32
+     ],
+     "dtype": "torch.float8_e8m0fnu"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/dynamic_quant",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      2,
+      7,
+      256,
+      251
+     ],
+     "dtype": "torch.int8"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      2,
+      7,
+      256
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/embedding_hash_table_lookup_or_insert",
+  "case": 12,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      16,
+      8
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      16
+     ],
+     "dtype": "torch.int32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/engram_gate_fusion",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.012,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      4,
+      4,
+      256
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      1024,
+      9
+     ],
+     "dtype": "torch.bfloat16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/exp",
+  "case": 12,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.003,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1000007
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/fft_conv",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.013,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    768,
+    1024
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/flash_attention_score_grad_enhance",
+  "case": 9,
+  "input": "FAIL",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "RuntimeError: permute(sparse_coo): number of dimensions in the tensor input does not match the length of the desired ordering of dimensions i.e. input.dim() = 2",
+  "seconds": null
+ },
+ {
+  "task": "cann/auto/fused_causal_conv1d",
+  "case": 17,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.022,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      1,
+      2048
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      4,
+      3,
+      2048
+     ],
+     "dtype": "torch.bfloat16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/gcd",
+  "case": 11,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.006,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1023,
+    1024
+   ],
+   "dtype": "torch.int32"
+  }
+ },
+ {
+  "task": "cann/auto/gqa",
+  "case": 18,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.041,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    128,
+    32,
+    128
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/grid_sampler_3d",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    11,
+    11,
+    13,
+    17
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/grouped_matmul",
+  "case": 19,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "list",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      16,
+      32
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      16,
+      32
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      16,
+      32
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      16,
+      32
+     ],
+     "dtype": "torch.float16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/grouped_matmul_swiglu_quant",
+  "case": 12,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      256
+     ],
+     "dtype": "torch.int8"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/image_resize_normalize",
+  "case": 2,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1,
+    225,
+    224
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/kimi_delta_attention",
+  "case": 5,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      1,
+      1,
+      3
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      1,
+      4,
+      3
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/kv_cache_append",
+  "case": 10,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      32,
+      16,
+      1,
+      32
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      32,
+      16,
+      1,
+      32
+     ],
+     "dtype": "torch.float16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/lact_ttt_chunk",
+  "case": 16,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.032,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      2048,
+      8,
+      128
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      256,
+      128
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      128,
+      256
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      256,
+      128
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/linear_cross_entropy",
+  "case": null,
+  "input": "BLOCKED",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "no case fits the memory budget",
+  "seconds": null
+ },
+ {
+  "task": "cann/auto/lstm",
+  "case": 11,
+  "input": "FAIL",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'",
+  "seconds": null
+ },
+ {
+  "task": "cann/auto/mhc_post_grad",
+  "case": 5,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      4,
+      384
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      4,
+      4
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      384
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1,
+      8,
+      4
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/mhc_sinkhorn",
+  "case": 18,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    2,
+    2
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/mla",
+  "case": 7,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.156,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1,
+    128,
+    512
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/mla_prolog",
+  "case": 4,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.079,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      1,
+      64,
+      512
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      1,
+      64,
+      64
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      1,
+      512
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      1,
+      64
+     ],
+     "dtype": "torch.bfloat16"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/moe_gating_top_k_softmax",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      2
+     ],
+     "dtype": "torch.float16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      2
+     ],
+     "dtype": "torch.int32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      2
+     ],
+     "dtype": "torch.int32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/moe_re_routing",
+  "case": 20,
+  "input": "FAIL",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "AssertionError: Sum of expert_token_num_per_rank (170) must equal A (64)",
+  "seconds": null
+ },
+ {
+  "task": "cann/auto/nms",
+  "case": 16,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.003,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    412
+   ],
+   "dtype": "torch.int64"
+  }
+ },
+ {
+  "task": "cann/auto/q4_0_dequant_matmul",
+  "case": 6,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    16,
+    128
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/quant_matmul",
+  "case": 18,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    32,
+    512
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/roi_align",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.018,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    50,
+    127,
+    7,
+    7
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/scatter",
+  "case": 14,
+  "input": "FAIL",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "TypeError: scatter_() received an invalid combination of arguments - got (Tensor, Tensor, NoneType), but expected one of:\n * (int dim, Tensor index, Tensor src)",
+  "seconds": null
+ },
+ {
+  "task": "cann/auto/scatter_block_update",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    64,
+    8,
+    256
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/selective_scan",
+  "case": 1,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.021,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    512,
+    768
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/sparse_flash_attention",
+  "case": 15,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.322,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    4,
+    64,
+    1,
+    512
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/sparse_lightning_indexer_grad_kl_loss_enhance",
+  "case": 2,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.026,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      16,
+      128
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      256,
+      1,
+      128
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      64,
+      16
+     ],
+     "dtype": "torch.float32"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      1
+     ],
+     "dtype": "torch.float32"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/strided_slice",
+  "case": 16,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    512,
+    512
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/tensor_program_vm",
+  "case": 16,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    8,
+    256
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/auto/top_k",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.006,
+  "shape": {
+   "kind": "tuple",
+   "items": [
+    {
+     "kind": "tensor",
+     "shape": [
+      2,
+      7,
+      256,
+      256
+     ],
+     "dtype": "torch.bfloat16"
+    },
+    {
+     "kind": "tensor",
+     "shape": [
+      2,
+      7,
+      256,
+      256
+     ],
+     "dtype": "torch.int64"
+    }
+   ]
+  }
+ },
+ {
+  "task": "cann/auto/transpose",
+  "case": 14,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    2,
+    7,
+    511,
+    127
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/unique",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.036,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    3071
+   ],
+   "dtype": "torch.bfloat16"
+  }
+ },
+ {
+  "task": "cann/auto/unsorted_segment_sum",
+  "case": 7,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1009,
+    1021
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/auto/weight_quant_batch_matmul",
+  "case": 4,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.005,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1,
+    1408
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/nn/rmsnorm",
+  "case": 16,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.001,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    11,
+    13,
+    17,
+    67
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/nn/swiglu",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.0,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    11,
+    13,
+    8,
+    67
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/nn/softmax",
+  "case": 10,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1009,
+    1021
+   ],
+   "dtype": "torch.float16"
+  }
+ },
+ {
+  "task": "cann/nn/gather",
+  "case": 13,
+  "input": "PASS",
+  "golden": "PASS",
+  "output": "PASS",
+  "device": "CPU",
+  "error": "",
+  "seconds": 0.002,
+  "shape": {
+   "kind": "tensor",
+   "shape": [
+    1000
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ {
+  "task": "cann/nn/apply_rotary_pos_emb",
+  "case": 14,
+  "input": "FAIL",
+  "golden": "BLOCKED",
+  "output": "BLOCKED",
+  "device": "CPU",
+  "error": "RuntimeError: The size of tensor a (17) must match the size of tensor b (13) at non-singleton dimension 2",
+  "seconds": null
+ }
+]

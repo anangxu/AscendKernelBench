@@ -33,12 +33,21 @@ class Model(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, *inputs):
-        attrs = globals().get("CASE_ATTRS") or {}
+    def forward(self, *inputs, **attrs):
+        attrs = attrs or (globals().get("CASE_ATTRS") or {})
         fn = _entry(_golden_module())
         if fn is None:
             raise RuntimeError("official golden has no callable entry")
-        return fn(*inputs, **attrs)
+        try:
+            return fn(*inputs, **attrs)
+        except TypeError:
+            # Official goldens take the case attributes positionally, in their
+            # own signature order, so bind them the same way here.
+            import inspect
+
+            names = [p.name for p in inspect.signature(fn).parameters.values()]
+            ordered = [attrs[name] for name in names[len(inputs):] if name in attrs]
+            return fn(*inputs, *ordered)
 
 
 def get_inputs():
