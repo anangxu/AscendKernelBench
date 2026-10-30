@@ -38,3 +38,26 @@ Per-task best: static PASS 5/5, compile PASS 2/5, correctness PASS 0/5.
   official cases;
 - the case contract now states the anti-cheat rules, the launcher parameters a
   candidate must not redeclare, and the aicore restrictions (sqrt, casts).
+
+## Round 4 (output-shape rule in the contract)
+
+| Task | Static | Compile | Note |
+|---|---|---|---|
+| swiglu | PASS | FAIL | `template ...` error in the generated kernel |
+| gather | PASS | FAIL | `reference ...` error |
+| scatter | PASS | FAIL | cast error |
+| softmax | generation truncated at max_tokens | n/a | no candidate |
+| linear_cross_entropy | FAIL: tensor comparison in wrapper | n/a | no candidate |
+
+### Cross-round tally
+
+- candidates generated: 15 across four rounds (3.75 per task)
+- static check passed: 12 of 15
+- compile passed: 2 of 15 (swiglu round 2, softmax round 3)
+- correctness passed: 0 of 15
+- valid timings: 0, so Speedup is N/A and the hidden-input check is never reached
+
+The two compiled candidates were diagnosed as model-side: swiglu returned an
+`empty_like` tensor of the input shape, softmax's kernel math did not match the
+reference. Contract clarifications raise the static and compile rate but have not
+yet produced a numerically correct candidate.
