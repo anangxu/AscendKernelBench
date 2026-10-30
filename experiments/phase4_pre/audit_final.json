@@ -1,0 +1,207 @@
+{
+ "chain": {
+  "s4/swiglu": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4/softmax": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4/gather": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4/scatter": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4/linear_cross_entropy": {
+   "static": "none",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4b/swiglu": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "PASS",
+   "load": "PASS",
+   "exec": "PASS",
+   "correct": "FAIL"
+  },
+  "s4b/gather": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4b/scatter": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4b/linear_cross_entropy": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4c/swiglu": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4c/softmax": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "PASS",
+   "load": "PASS",
+   "exec": "PASS",
+   "correct": "FAIL"
+  },
+  "s4c/gather": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4c/scatter": {
+   "static": "FAIL",
+   "dev": "attempted",
+   "build": "not_run",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4c/linear_cross_entropy": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4d/swiglu": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4d/gather": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4d/scatter": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4d/linear_cross_entropy": {
+   "static": "FAIL",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4d/softmax": {
+   "static": "none",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4e/swiglu": {
+   "static": "FAIL",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4e/softmax": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "FAIL",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4e/gather": {
+   "static": "PASS",
+   "dev": "attempted",
+   "build": "PASS",
+   "load": "FAIL",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4e/scatter": {
+   "static": "FAIL",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  },
+  "s4e/linear_cross_entropy": {
+   "static": "FAIL",
+   "dev": "no",
+   "build": "-",
+   "load": "-",
+   "exec": "-",
+   "correct": "-"
+  }
+ },
+ "tally": {
+  "attempts": 25,
+  "candidates": 22,
+  "static_pass": 11,
+  "device_attempted": 18,
+  "build_ran": 11,
+  "build_pass": 3,
+  "load_pass": 2,
+  "exec_pass": 2,
+  "correct": 0
+ }
+}
