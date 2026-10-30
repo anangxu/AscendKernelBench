@@ -152,7 +152,9 @@ def load_cases(
                             tuple(
                                 (float(inner[0]), float(inner[1]))
                                 if not isinstance(inner[0], str)
-                                else tuple([str(inner[0])] + [float(v) for v in inner[1:]])
+                                else tuple(
+                                    [str(inner[0])] + [float(v) for v in inner[1:]]
+                                )
                                 for inner in item
                             )
                         )

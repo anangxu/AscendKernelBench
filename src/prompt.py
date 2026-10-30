@@ -569,9 +569,15 @@ def case_contract(task: Task) -> str:
     cases = getattr(task, "cases", ())
     if not cases:
         return ""
-    dtypes = sorted({dtype for case in cases for dtype in case.dtypes})
+    dtypes = sorted(
+        {dtype for case in cases for dtype in case.dtypes if isinstance(dtype, str)}
+    )
     epsilons = sorted({case.epsilon for case in cases})
-    shapes = sorted({tuple(case.input_shapes[0]) for case in cases})
+    shapes = sorted(
+        {tuple(shape) for case in cases if (shape := case.input_shapes[0]) is not None}
+    )
+    if not shapes:
+        shapes = [(0,)]
     ranks = sorted({len(shape) for shape in shapes})
     shown = ", ".join(str(list(shape)) for shape in shapes[:3])
     more = "" if len(shapes) <= 3 else f" and {len(shapes) - 3} more shapes"
