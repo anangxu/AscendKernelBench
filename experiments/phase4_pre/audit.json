@@ -1,0 +1,250 @@
+[
+ {
+  "round": "s4",
+  "task": "swiglu",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "51b9f101c5e4",
+  "compile": "not_run",
+  "device": "evaluated",
+  "why": "Contains try-except block (potential fallback bypass"
+ },
+ {
+  "round": "s4",
+  "task": "softmax",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "04ace958fc77",
+  "compile": "not_run",
+  "device": "evaluated",
+  "why": "Contains try-except block (potential fallback bypass"
+ },
+ {
+  "round": "s4",
+  "task": "gather",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "926a6255cee8",
+  "compile": "not_run",
+  "device": "evaluated",
+  "why": "Contains try-except block (potential fallback bypass"
+ },
+ {
+  "round": "s4",
+  "task": "scatter",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "273dcd53f408",
+  "compile": "not_run",
+  "device": "evaluated",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4",
+  "task": "linear_cross_entropy",
+  "candidate": false,
+  "static": "n/a",
+  "sha": "",
+  "compile": "not_run",
+  "device": "not_run"
+ },
+ {
+  "round": "s4b",
+  "task": "swiglu",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "df9f6f9892f9",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4b",
+  "task": "softmax",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "0238b3dbf000",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4b",
+  "task": "gather",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "1d91108a7d09",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4b",
+  "task": "scatter",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "cbb9f1cea91d",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4b",
+  "task": "linear_cross_entropy",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "0e310deb81ea",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4c",
+  "task": "swiglu",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "c404a4d0b58d",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4c",
+  "task": "softmax",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "29321885c72f",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4c",
+  "task": "gather",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "2cffabe49f0d",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4c",
+  "task": "scatter",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "65720cde156a",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4c",
+  "task": "linear_cross_entropy",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "25a6119a4d08",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4d",
+  "task": "swiglu",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "83cd9955b1d7",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4d",
+  "task": "softmax",
+  "candidate": false,
+  "static": "n/a",
+  "sha": "",
+  "compile": "not_run",
+  "device": "not_run"
+ },
+ {
+  "round": "s4d",
+  "task": "gather",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "375fed7c3c65",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4d",
+  "task": "scatter",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "3ab95364108e",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4d",
+  "task": "linear_cross_entropy",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "a193cc3c09b5",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4e",
+  "task": "swiglu",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "c292e9e01743",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4e",
+  "task": "softmax",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "bf28537e9160",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4e",
+  "task": "gather",
+  "candidate": true,
+  "static": "PASS",
+  "sha": "7f5fd4a85c62",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": ""
+ },
+ {
+  "round": "s4e",
+  "task": "scatter",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "fcc133698f6e",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ },
+ {
+  "round": "s4e",
+  "task": "linear_cross_entropy",
+  "candidate": true,
+  "static": "FAIL",
+  "sha": "1464fe944f08",
+  "compile": "not_run",
+  "device": "not_run",
+  "why": "comparison on non-scalar values \u2014 tensor comparisons"
+ }
+]
