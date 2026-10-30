@@ -35,9 +35,15 @@ def contract_checks() -> None:
     for symbol in ("Model", "get_inputs", "get_init_inputs"):
         check(f"contract has {symbol}", symbol in task.task_py)
     check(
-        "the cann suite holds both real tasks",
+        "the cann suite holds the five official tasks",
         [item.task_id for item in discover_tasks(suite="cann")]
-        == ["cann/nn/rmsnorm", "cann/nn/swiglu"],
+        == [
+            "cann/nn/apply_rotary_pos_emb",
+            "cann/nn/gather",
+            "cann/nn/rmsnorm",
+            "cann/nn/softmax",
+            "cann/nn/swiglu",
+        ],
     )
     check("the kernelbench corpus still has 270 tasks", len(discover_tasks()) == 270)
     overlap = [
