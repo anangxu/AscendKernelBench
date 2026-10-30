@@ -556,7 +556,11 @@ def build_prompt(
     prompt = PromptBuilder(
         task, hardware, backend=backend, build_backend=build_backend, examples=examples
     ).build(mode)
-    return prompt + case_contract(task)
+    block = case_contract(task)
+    if block:
+        # Case tasks also see the structural skeleton of a compiling source.
+        block += KERNEL_SKELETON
+    return prompt + block
 
 
 def case_contract(task: Task) -> str:
@@ -656,3 +660,40 @@ def system_prompt(
     if build is BuildBackend.DEEPJIT:
         return DEEPJIT_SYSTEM_PROMPT
     return SYSTEM_PROMPT
+
+
+KERNEL_SKELETON = """
+
+Shape of a source that compiles (structure only, no operator math):
+
+  #include "kernel_operator.h"
+  class KernelExample {
+  public:
+      __aicore__ inline KernelExample() {}
+      __aicore__ inline void Init(__gm__ uint8_t* x, __gm__ uint8_t* y, uint32_t n)
+      {
+          this->n = n;
+          xGm.SetGlobalBuffer((__gm__ float*)x, n);
+          yGm.SetGlobalBuffer((__gm__ float*)y, n);
+      }
+      __aicore__ inline void Process()
+      {
+          AscendC::LocalMemAllocator<AscendC::Hardware::UB> ub;
+          AscendC::LocalTensor<float> a = ub.Alloc<float>(1024);
+          AscendC::LocalTensor<float> out = ub.Alloc<float>(1024);
+          // copy in with DataCopyPad, compute, copy out; keep flag pairs
+      }
+  private:
+      AscendC::GlobalTensor<float> xGm, yGm;
+      uint32_t n;
+  };
+  __global__ __vector__ void skeleton_entry(
+      __gm__ uint8_t* x, __gm__ uint8_t* y, uint32_t n)
+  {
+      AscendC::InitSocState();
+      KernelExample op;
+      op.Init(x, y, n);
+      op.Process();
+      AscendC::PipeBarrier<PIPE_ALL>();
+  }
+"""
