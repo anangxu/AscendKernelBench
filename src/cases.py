@@ -160,9 +160,7 @@ def load_cases(
                         )
                     elif isinstance(item[0], str):
                         try:
-                            parsed.append(
-                                (float(item[0]), float(item[1]))
-                            )
+                            parsed.append((float(item[0]), float(item[1])))
                         except ValueError:
                             parsed.append(
                                 tuple([str(item[0])] + [float(v) for v in item[1:]])
