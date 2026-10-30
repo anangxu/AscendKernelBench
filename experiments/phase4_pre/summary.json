@@ -1,0 +1,38 @@
+[
+ {
+  "task": "cann/nn/swiglu",
+  "cases": 1,
+  "passed": 0,
+  "error": 1,
+  "stage": "static_check",
+  "compiled": false,
+  "correct": false
+ },
+ {
+  "task": "cann/nn/softmax",
+  "cases": 1,
+  "passed": 0,
+  "error": 1,
+  "stage": "static_check",
+  "compiled": false,
+  "correct": false
+ },
+ {
+  "task": "cann/nn/gather",
+  "cases": 1,
+  "passed": 0,
+  "error": 1,
+  "stage": "static_check",
+  "compiled": false,
+  "correct": false
+ },
+ {
+  "task": "cann/auto/scatter",
+  "cases": 1,
+  "passed": 0,
+  "error": 1,
+  "stage": "static_check",
+  "compiled": false,
+  "correct": false
+ }
+]

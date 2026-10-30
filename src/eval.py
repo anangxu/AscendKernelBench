@@ -270,6 +270,23 @@ def evaluate_run(
     return results
 
 
+def _baseline_cases(task) -> tuple:
+    """Return the pinned baseline case of a CANN task, if one exists."""
+    try:
+        from .cann_baseline import BASELINE_PATH, baseline_case
+    except Exception:
+        return ()
+    if not BASELINE_PATH.is_file():
+        return ()
+    import json
+
+    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get("tasks", {})
+    config = data.get(task.task_id)
+    if not config:
+        return ()
+    return (baseline_case(task.task_id, config, seed=0),)
+
+
 def _evaluate_cases(
     task, sample_path, *, hardware, config, backend, build_backend, deepjit, harness
 ) -> dict:
@@ -278,7 +295,10 @@ def _evaluate_cases(
 
     statuses: dict[int, str] = {}
     records: dict[str, object] = {}
-    for index, case in enumerate(task.cases):
+    # A task with a pinned AKB baseline is scored on that single workload; the
+    # official cases stay available as a separate generalisation suite.
+    chosen = _baseline_cases(task) or task.cases
+    for index, case in enumerate(chosen):
         result = eval_sample(
             task,
             sample_path,
@@ -306,8 +326,8 @@ def _evaluate_cases(
             "correctness": result.get("correctness"),
             "metadata": metadata,
         }
-    summary = cases_module.summarize(task.cases, statuses).record()
-    for case in task.cases[len(statuses) :]:
+    summary = cases_module.summarize(chosen, statuses).record()
+    for case in chosen[len(statuses) :]:
         statuses[case.case_id] = "not_run"
         records[str(case.case_id)] = {"case": case.record(), "status": "not_run"}
     payload = {"summary": summary, "cases": records}
