@@ -602,6 +602,11 @@ one case, one shape, or one epsilon is not.
 - Follow the reference RMS definition and its numeric precision, including how
   NaN and Inf propagate.
 
+Static checks reject the wrapper outright if it contains `try`/`except`,
+`globals()`, `eval`/`exec`, or arithmetic and comparisons on tensors; keep the
+wrapper a thin call into `torch.ops.custom_op` and leave all tensor math to the
+device kernel.
+
 Case attributes (dim or similar) are published to your module as the global
 `CASE_ATTRS` before each forward call; read it to honor the per-case value
 instead of assuming a default.
@@ -612,6 +617,9 @@ Kernel entry signature (required so the AKB builder can parse and launch it):
 - Pointer parameters must use explicit `__gm__ T*` types, for example
   `__gm__ uint8_t*` or `__gm__ float*`, followed by plain scalars.
 - Never use `GM_ADDR` or another alias in the entry parameters.
+- Do not declare `numBlocks` or `stream` yourself; the launcher adds them.
+- On the aicore side use `sqrt`, never `sqrtf`, and cast between floating and
+  integer values through `int32_t` rather than directly.
 - Never make the entry itself a template; templated helpers are fine.
 - dtype dispatch, shape-dependent tiling, and tuning are still allowed.
 

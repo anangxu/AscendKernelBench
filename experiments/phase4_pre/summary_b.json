@@ -1,0 +1,42 @@
+[
+ {
+  "task": "cann/nn/swiglu",
+  "gen": "saved",
+  "static": "PASS",
+  "compile": "PASS",
+  "correctness": "0/5 trials",
+  "timing": "none"
+ },
+ {
+  "task": "cann/nn/gather",
+  "gen": "saved",
+  "static": "PASS",
+  "compile": "FAIL: redefinition of parameter 'numBlocks'",
+  "correctness": "n/a",
+  "timing": "n/a"
+ },
+ {
+  "task": "cann/auto/scatter",
+  "gen": "saved",
+  "static": "PASS",
+  "compile": "FAIL: no matching function for call to 'sqrtf'",
+  "correctness": "n/a",
+  "timing": "n/a"
+ },
+ {
+  "task": "cann/auto/linear_cross_entropy",
+  "gen": "saved",
+  "static": "PASS",
+  "compile": "FAIL: cast between floating and unsigned integer",
+  "correctness": "n/a",
+  "timing": "n/a"
+ },
+ {
+  "task": "cann/nn/softmax",
+  "gen": "saved",
+  "static": "FAIL: comparison on non-scalar values",
+  "compile": "not attempted",
+  "correctness": "n/a",
+  "timing": "n/a"
+ }
+]
