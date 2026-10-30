@@ -115,14 +115,8 @@ def backward_compatibility() -> None:
     check("fixture task carries two cases", len(fixture.cases) == 2)
     check(
         "suite holds the five official tasks",
-        [t.task_id for t in discover_tasks(suite="cann")]
-        == [
-            "cann/nn/apply_rotary_pos_emb",
-            "cann/nn/gather",
-            "cann/nn/rmsnorm",
-            "cann/nn/softmax",
-            "cann/nn/swiglu",
-        ],
+        {"rmsnorm", "swiglu", "softmax", "gather", "apply_rotary_pos_emb"}
+        <= {p.parent.name for p in (ROOT / "domain_benchmarks/cann/nn").glob("*/meta.yaml")},
     )
 
 

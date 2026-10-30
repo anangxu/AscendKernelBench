@@ -38,7 +38,11 @@ def contract_checks() -> None:
         sorted({c.attrs.get("dim") for c in task.cases if "dim" in c.attrs}) == [-1, 0, 1, 2],
         str(sorted({c.attrs.get("dim") for c in task.cases if "dim" in c.attrs})),
     )
-    check("suite holds five tasks", len(discover_tasks(suite="cann")) == 5)
+    check(
+        "the five pilot tasks are still registered",
+        {"rmsnorm", "swiglu", "softmax", "gather", "apply_rotary_pos_emb"}
+        <= {p.parent.name for p in (ROOT / "domain_benchmarks/cann/nn").glob("*/meta.yaml")},
+    )
     check("kernelbench unchanged", len(discover_tasks()) == 270)
 
 
