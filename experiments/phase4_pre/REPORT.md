@@ -1,43 +1,40 @@
-# Phase 4 pre-experiment: five frozen AKB baselines
+# Phase 4 pre-experiment: consolidated result
 
-- baseline commit: `4aecd30`
-- baseline.json sha256: `6ddc84667e1f6ee6`
-- model `deepseek-flash`, `zero_shot`, `reasoning_effort=low`, `max_tokens=32768`,
-  `temperature=0`, `n_samples=1`, hardware `ascend910b4`, `ascendc` + `cmake`
+Three generation rounds were run with the same frozen protocol (deepseek-flash,
+zero_shot, reasoning_effort low, temperature 0, one sample per task). Each round
+tightened the shared case contract after reading the failures, and every
+candidate stays in `runs/` unmodified.
 
-## Generation
-
-| Task | Result |
-|---|---|
-| swiglu | saved |
-| softmax | saved |
-| gather | saved |
-| scatter | saved |
-| linear_cross_entropy | truncated |
-
-## Evaluation (one pinned baseline case each)
-
-| Task | Cases | Passed | Error | Failure stage | Compiled |
+| Task | Generation | Static | Compile | Correctness | Timing |
 |---|---|---|---|---|---|
-| cann/nn/swiglu | 1 | 0 | 1 | static_check | False |
-| cann/nn/softmax | 1 | 0 | 1 | static_check | False |
-| cann/nn/gather | 1 | 0 | 1 | static_check | False |
-| cann/auto/scatter | 1 | 0 | 1 | static_check | False |
+| swiglu | saved | PASS (r2) | PASS | 0/5 trials | none |
+| softmax | saved | PASS (r3) | PASS | 0/1 case | none |
+| gather | saved | PASS (r2) | FAIL: numBlocks redeclared | n/a | n/a |
+| scatter | saved | PASS (r2) | FAIL: sqrtf not found | n/a | n/a |
+| linear_cross_entropy | saved | PASS (r2/r3) | FAIL: float->unsigned cast | n/a | n/a |
 
-## Tally
+## What the rounds show
 
-- generation saved: 4/5 (linear_cross_entropy truncated at max_tokens)
-- static check passed: 0/4
-- compile attempted: 0 (the static gate rejects before any build)
-- NPU run: 0, correctness: 0, valid timings: 0, speedup: N/A
+- round 1: every candidate tripped the anti-cheat rules; nothing compiled.
+- round 2: the contract named those rules, four of five passed the static check,
+  and swiglu built and ran on the 910B4 (correctness 0/5).
+- round 3: the contract also named the launcher and aicore pitfalls; softmax
+  passed the static check and built, the other four each failed on a different
+  model-side error (tensor comparison, numBlocks, sqrtf, unsigned cast).
 
-The candidates trip the anti-cheat rules (try/except, globals()) and, for
-scatter, declare an rms_norm entry point. These are model-side results, not
-framework failures; the evaluator classified each as failure_stage
-static_check with a single pinned case per task.
+Per-task best: static PASS 5/5, compile PASS 2/5, correctness PASS 0/5.
 
-## Pipeline note
+## Still open
 
-The evaluator now scores a task on its pinned baseline case when one exists,
-so a candidate is measured on one stable workload instead of the twenty
-official cases. The official cases remain available as a separate suite.
+- No candidate is numerically correct, so no valid timing, no Speedup, and the
+  hidden-input legality check never runs (it sits behind correctness).
+- `max_difference` reads 0.0 next to a failed comparison for one candidate; that
+  field is only defined for equal-shaped top-level tensors, so it is not a
+  verdict and the report must not read it as one.
+
+## Framework fixes made along the way
+
+- the evaluator scores a task on its pinned baseline case, not the twenty
+  official cases;
+- the case contract now states the anti-cheat rules, the launcher parameters a
+  candidate must not redeclare, and the aicore restrictions (sqrt, casts).
