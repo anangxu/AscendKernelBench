@@ -1,0 +1,4 @@
+source: cann-ops-nn
+source_revision: CANN Bench 2d7cd332247f33a66ca67c77d9f09d446a780dfe tasks/level1/swi_glu
+category: cann-bench-L1
+cases: official/cases.yaml

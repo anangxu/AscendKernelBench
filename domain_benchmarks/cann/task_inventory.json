@@ -1,0 +1,788 @@
+{
+  "source": "2d7cd332247f33a66ca67c77d9f09d446a780dfe",
+  "operator_count": 60,
+  "converted": 60,
+  "sha_mismatches": [],
+  "tasks": [
+    {
+      "id": "exp",
+      "path": "tasks/level1/exp",
+      "level": "L1",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "swi_glu",
+      "path": "tasks/level1/swi_glu",
+      "level": "L1",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "apply_rotary_pos_emb",
+      "path": "tasks/level2/apply_rotary_pos_emb",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "arg_max",
+      "path": "tasks/level2/arg_max",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "cross_entropy_loss",
+      "path": "tasks/level2/cross_entropy_loss",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "cummin",
+      "path": "tasks/level2/cummin",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "dynamic_quant",
+      "path": "tasks/level2/dynamic_quant",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "gather",
+      "path": "tasks/level2/gather",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "gcd",
+      "path": "tasks/level2/gcd",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "grid_sampler_3d",
+      "path": "tasks/level2/grid_sampler_3d",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "image_resize_normalize",
+      "path": "tasks/level2/image_resize_normalize",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "rms_norm",
+      "path": "tasks/level2/rms_norm",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "scatter",
+      "path": "tasks/level2/scatter",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "softmax",
+      "path": "tasks/level2/softmax",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "unsorted_segment_sum",
+      "path": "tasks/level2/unsorted_segment_sum",
+      "level": "L2",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "add_rms_norm_dynamic_quant",
+      "path": "tasks/level3/add_rms_norm_dynamic_quant",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "aggregate_hidden",
+      "path": "tasks/level3/aggregate_hidden",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "aggregate_hidden_grad",
+      "path": "tasks/level3/aggregate_hidden_grad",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "categorical_embedding_bag",
+      "path": "tasks/level3/categorical_embedding_bag",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "conv_2d",
+      "path": "tasks/level3/conv_2d",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "conv_3d_backprop_filter",
+      "path": "tasks/level3/conv_3d_backprop_filter",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "depthwise_conv_2d",
+      "path": "tasks/level3/depthwise_conv_2d",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "dequant_swiglu_quant",
+      "path": "tasks/level3/dequant_swiglu_quant",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "dilation_2d",
+      "path": "tasks/level3/dilation_2d",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "embedding_hash_table_lookup_or_insert",
+      "path": "tasks/level3/embedding_hash_table_lookup_or_insert",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "engram_gate_fusion",
+      "path": "tasks/level3/engram_gate_fusion",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "grouped_matmul",
+      "path": "tasks/level3/grouped_matmul",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "kv_cache_append",
+      "path": "tasks/level3/kv_cache_append",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "mhc_post_grad",
+      "path": "tasks/level3/mhc_post_grad",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "mhc_sinkhorn",
+      "path": "tasks/level3/mhc_sinkhorn",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "moe_gating_top_k_softmax",
+      "path": "tasks/level3/moe_gating_top_k_softmax",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "moe_re_routing",
+      "path": "tasks/level3/moe_re_routing",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "nms",
+      "path": "tasks/level3/nms",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "q4_0_dequant_matmul",
+      "path": "tasks/level3/q4_0_dequant_matmul",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "quant_matmul",
+      "path": "tasks/level3/quant_matmul",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "roi_align",
+      "path": "tasks/level3/roi_align",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "scatter_block_update",
+      "path": "tasks/level3/scatter_block_update",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "strided_slice",
+      "path": "tasks/level3/strided_slice",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "top_k",
+      "path": "tasks/level3/top_k",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "transpose",
+      "path": "tasks/level3/transpose",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "unique",
+      "path": "tasks/level3/unique",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "weight_quant_batch_matmul",
+      "path": "tasks/level3/weight_quant_batch_matmul",
+      "level": "L3",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "attention_residual",
+      "path": "tasks/level4/attention_residual",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "dynamic_mx_quant",
+      "path": "tasks/level4/dynamic_mx_quant",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "fft_conv",
+      "path": "tasks/level4/fft_conv",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "flash_attention_score_grad_enhance",
+      "path": "tasks/level4/flash_attention_score_grad_enhance",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "fused_causal_conv1d",
+      "path": "tasks/level4/fused_causal_conv1d",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "gqa",
+      "path": "tasks/level4/gqa",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "grouped_matmul_swiglu_quant",
+      "path": "tasks/level4/grouped_matmul_swiglu_quant",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "linear_cross_entropy",
+      "path": "tasks/level4/linear_cross_entropy",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "lstm",
+      "path": "tasks/level4/lstm",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "mla",
+      "path": "tasks/level4/mla",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "mla_prolog",
+      "path": "tasks/level4/mla_prolog",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "selective_scan",
+      "path": "tasks/level4/selective_scan",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "sparse_flash_attention",
+      "path": "tasks/level4/sparse_flash_attention",
+      "level": "L4",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "compressed_sparse_attention_core",
+      "path": "tasks/level5/compressed_sparse_attention_core",
+      "level": "L5",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "kimi_delta_attention",
+      "path": "tasks/level5/kimi_delta_attention",
+      "level": "L5",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "lact_ttt_chunk",
+      "path": "tasks/level5/lact_ttt_chunk",
+      "level": "L5",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "sparse_lightning_indexer_grad_kl_loss_enhance",
+      "path": "tasks/level5/sparse_lightning_indexer_grad_kl_loss_enhance",
+      "level": "L5",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    },
+    {
+      "id": "tensor_program_vm",
+      "path": "tasks/level5/tensor_program_vm",
+      "level": "L5",
+      "cases": 20,
+      "official_files": [
+        "cases.csv",
+        "cases.yaml",
+        "desc.md",
+        "golden.py",
+        "proto.yaml"
+      ]
+    }
+  ]
+}
