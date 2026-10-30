@@ -1,53 +1,58 @@
-"""Apply rotary position embedding with the official four-input contract.
+"""Apply rotary position embedding, delegating to the official golden.
 
-Inputs: query, key, cos, sin. Attributes: layout and rotaryMode. Outputs:
-(query_out, key_out), which the evaluator compares as an output tree.
+Inputs: query, key, cos, sin. Attributes: layout, rotaryMode. Outputs:
+(query_out, key_out), compared as an output tree.
 """
+
+import importlib.util
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 
-
-def _attr(name, default):
-    """Return a case attribute, defaulting when absent."""
-    attrs = globals().get("CASE_ATTRS") or {}
-    return attrs.get(name, default)
+GOLDEN_PATH = Path(__file__).resolve().parent / "official" / "golden.py"
 
 
-def _rotate(x, cos, sin, layout):
-    """Apply the rotary transform along the last dimension."""
-    half = x.shape[-1] // 2
-    if layout == "BSND" or layout == "BNSD":
-        first, second = x[..., :half], x[..., half:]
-    else:
-        first, second = x[..., 0::2], x[..., 1::2]
-    c = cos[..., :half] if cos.shape[-1] >= half else cos
-    s = sin[..., :half] if sin.shape[-1] >= half else sin
-    if layout in ("BSND", "BNSD"):
-        return torch.cat([first * c - second * s, first * s + second * c], dim=-1)
-    out = torch.empty_like(x)
-    out[..., 0::2] = first * c - second * s
-    out[..., 1::2] = first * s + second * c
-    return out
+def _golden_module():
+    """Load the vendored official golden module."""
+    spec = importlib.util.spec_from_file_location("golden_rope", GOLDEN_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class Model(nn.Module):
-    """Reference rotary embedding; returns the two rotated tensors."""
+    """Official rotary embedding reference."""
 
     def __init__(self):
         super().__init__()
 
-    def forward(self, query, key, cos, sin):
-        layout = _attr("layout", "BSND")
-        return _rotate(query, cos, sin, layout), _rotate(key, cos, sin, layout)
+    def forward(self, *inputs, **attrs):
+        attrs = attrs or (globals().get("CASE_ATTRS") or {})
+        fn = _golden_module().apply_rotary_pos_emb
+        import inspect
+
+        params = [
+            p
+            for p in inspect.signature(fn).parameters.values()
+            if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+        ]
+        bound, used = {}, 0
+        for p in params:
+            if p.name in attrs:
+                bound[p.name] = attrs[p.name]
+            elif used < len(inputs):
+                bound[p.name] = inputs[used]
+                used += 1
+        return fn(**bound)
 
 
 def get_inputs():
-    """Return a default four-input set."""
-    q = torch.randn(2, 8, 16, 64)
-    k = torch.randn(2, 8, 16, 64)
-    cos = torch.randn(1, 1, 16, 32)
-    sin = torch.randn(1, 1, 16, 32)
+    """Return a default four-input set for the baseline baseline."""
+    q = torch.randn(2, 16, 4, 64)
+    k = torch.randn(2, 16, 4, 64)
+    cos = torch.randn(16, 32)
+    sin = torch.randn(16, 32)
     return [q, k, cos, sin]
 
 

@@ -2455,13 +2455,12 @@
   "cann/nn/rmsnorm": {
    "shapes": [
     [
-     11,
-     13,
-     17,
-     67
+     32,
+     128,
+     768
     ],
     [
-     67
+     768
     ]
    ],
    "dtypes": [
@@ -2469,34 +2468,32 @@
     "float16"
    ],
    "attrs": {
-    "epsilon": 1e-08
+    "epsilon": 1e-06
    },
    "value_range": [
-    NaN,
-    NaN
+    -1.0,
+    1.0
    ],
-   "origin": "official case 16"
+   "origin": "official case 1 (finite range)"
   },
   "cann/nn/swiglu": {
    "shapes": [
     [
-     11,
-     13,
-     16,
-     67
+     1024,
+     2048
     ]
    ],
    "dtypes": [
-    "float32"
+    "float16"
    ],
    "attrs": {
-    "dim": 2
+    "dim": -1
    },
    "value_range": [
-    NaN,
-    NaN
+    -1.0,
+    1.0
    ],
-   "origin": "official case 13"
+   "origin": "official case 1 (finite range)"
   },
   "cann/nn/softmax": {
    "shapes": [
@@ -2600,11 +2597,11 @@
     ],
     [
      16,
-     64
+     32
     ],
     [
      16,
-     64
+     32
     ]
    ],
    "dtypes": [
@@ -2635,7 +2632,7 @@
      1
     ]
    ],
-   "origin": "AKB custom baseline; cos/sin sized (S, D) to broadcast with head_dim"
+   "origin": "AKB custom baseline; cos/sin follow the golden (S, D/2) contract"
   }
  }
 }
