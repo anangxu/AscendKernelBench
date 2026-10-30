@@ -585,7 +585,7 @@ one case, one shape, or one epsilon is not.
 
 - Inputs: x with shape (..., D) and gamma with shape (D,); x and gamma share one
   dtype. The output y has exactly the shape and dtype of x.
-- dtypes: {', '.join(dtypes)}; the input dtype must be preserved.
+- dtypes: {", ".join(dtypes)}; the input dtype must be preserved.
 - Normalization runs over the last dimension; D is dynamic, not a fixed size.
 - Dimensions: the task definition supports 2 to 8; the cases exercise
   {ranks[0]} to {ranks[-1]}. Shapes may be non-aligned, e.g.
