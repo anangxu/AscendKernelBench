@@ -212,6 +212,42 @@ def _semantic_tensor(spec, shape, name, torch):
     return values.reshape(tuple(int(v) for v in shape)).to(getattr(torch, name))
 
 
+def compare_outputs(
+    ref, new, *, atol: float, rtol: float
+) -> tuple[bool, float]:
+    """Compare two tensors with NaN masks, Inf signs, then finite tolerance.
+
+    Returns the verdict and the largest finite absolute difference.
+    """
+    import torch
+
+    if not isinstance(ref, torch.Tensor) or not isinstance(new, torch.Tensor):
+        return False, float("inf")
+    if ref.shape != new.shape:
+        return False, float("inf")
+    r, n = ref.float(), new.float()
+    nan_r, nan_n = torch.isnan(r), torch.isnan(n)
+    if not torch.equal(nan_r, nan_n):
+        return False, float("inf")
+    keep = ~nan_r
+    r, n = r[keep], n[keep]
+    inf_r, inf_n = torch.isinf(r), torch.isinf(n)
+    if not torch.equal(inf_r, inf_n):
+        return False, float("inf")
+    if bool(inf_r.any()) and not torch.equal(
+        torch.sign(r[inf_r]), torch.sign(n[inf_n])
+    ):
+        return False, float("inf")
+    finite = ~inf_r
+    if not bool(finite.any()):
+        return True, 0.0
+    diff = (r[finite] - n[finite]).abs()
+    ok = bool(
+        torch.allclose(r[finite], n[finite], atol=atol, rtol=rtol, equal_nan=True)
+    )
+    return ok, float(diff.max())
+
+
 def generate_inputs(case: CaseSpec, torch) -> list:
     """Build the case inputs from their shapes, dtypes, ranges, and seed.
 
