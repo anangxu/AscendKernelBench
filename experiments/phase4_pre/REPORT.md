@@ -61,3 +61,18 @@ The two compiled candidates were diagnosed as model-side: swiglu returned an
 `empty_like` tensor of the input shape, softmax's kernel math did not match the
 reference. Contract clarifications raise the static and compile rate but have not
 yet produced a numerically correct candidate.
+
+## Hidden-input legality and alias semantics (verified this round)
+
+- `perturb_floating_inputs` only scales nonzero floating entries; integer,
+  boolean, and exact-zero values are left untouched.
+- Checked against all sixty baselines and every hidden scale: integer and index
+  tensors are byte-identical before and after, and shapes never change.
+  Result: 60/60 tasks clean, zero violations.
+- `inputs_were_mutated` behaves correctly on the same material: clean inputs are
+  not flagged, an in-place edit is flagged, and a change in the second tensor of
+  a two-input case is flagged. That covers the in-place semantics a scatter-style
+  operator needs.
+
+Neither check needs a correct candidate, so both are satisfied even though the
+model has not produced a numerically correct kernel yet.
