@@ -1,0 +1,4 @@
+source: cann-ops-nn
+source_revision: CANN Bench 2d7cd332247f33a66ca67c77d9f09d446a780dfe tasks/level2/gcd
+category: cann-bench-L2
+cases: official/cases.yaml

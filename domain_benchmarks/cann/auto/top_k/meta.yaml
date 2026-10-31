@@ -1,0 +1,4 @@
+source: cann-ops-nn
+source_revision: CANN Bench 2d7cd332247f33a66ca67c77d9f09d446a780dfe tasks/level3/top_k
+category: cann-bench-L3
+cases: official/cases.yaml
