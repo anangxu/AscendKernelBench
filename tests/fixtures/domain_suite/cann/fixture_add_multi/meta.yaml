@@ -1,0 +1,4 @@
+source: test-fixture
+source_revision: case-adapter-acceptance
+category: elementwise
+cases: cases.yaml

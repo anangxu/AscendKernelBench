@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from . import backend as backend_module
+from . import suite as suite_module
 from ._paths import RUNS_DIR
 from .backend import DEFAULT_BACKEND, Backend, parse_backend, validate_backend_build
 from .config import (
@@ -118,6 +119,9 @@ def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
             tasks.append(task)
     if tasks:
         merged["tasks"] = tasks
+    provenance = _merged_task_meta(recorded, generation_config)
+    if provenance:
+        merged["task_meta"] = provenance
     if filled:
         merged["record_filled"] = {
             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -125,6 +129,26 @@ def _merge_generation_config(run_dir: Path, generation_config: dict) -> dict:
             "reason": "the record predates these fields and held no samples",
         }
     return merged
+
+
+def _merged_task_meta(recorded: dict, request: dict) -> dict[str, Any]:
+    """Combine task provenance, keeping the first record for a task.
+
+    A continuation adds the provenance of the tasks it introduces and never
+    rewrites what the run already recorded.
+    """
+    old = recorded.get("task_meta")
+    new = request.get("task_meta")
+    combined: dict[str, Any] = {}
+    if isinstance(new, dict):
+        combined.update(
+            {key: dict(value) for key, value in new.items() if isinstance(value, dict)}
+        )
+    if isinstance(old, dict):
+        combined.update(
+            {key: dict(value) for key, value in old.items() if isinstance(value, dict)}
+        )
+    return combined
 
 
 def create_run(run_name: str, generation_config: dict, *, resume: bool = False) -> Path:
@@ -177,6 +201,7 @@ def _check_run_compatible(
             "new run name."
         )
     resolve_run_backend(run_dir)
+    _check_recorded_task_meta(run_dir, generation_config)
     task_ids = generation_config.get("tasks") or []
     samples = int(generation_config.get("num_samples") or 0)
     if resume:
@@ -201,6 +226,27 @@ def _check_run_compatible(
             f"{run_dir} already holds {len(existing)} candidate(s): {shown}{more}. "
             "Generation does not overwrite samples; use a new run name."
         )
+
+
+def _check_recorded_task_meta(run_dir: Path, generation_config: dict) -> None:
+    """Refuse a request whose task sources differ from the recorded ones."""
+    recorded = recorded_task_meta(run_dir)
+    requested = generation_config.get("task_meta")
+    if not recorded or not isinstance(requested, dict):
+        return
+    for task_id, entry in requested.items():
+        if not isinstance(entry, dict):
+            continue
+        old = recorded.get(task_id)
+        if not isinstance(old, dict):
+            continue
+        conflict = _provenance_conflict(old, entry)
+        if conflict:
+            raise ValueError(
+                f"{run_dir} recorded task {task_id} with {conflict}, but this "
+                "request differs; the task source or its provenance changed. Use "
+                "a new run name or restore it."
+            )
 
 
 def resolve_run(run: str | Path) -> Path:
@@ -359,6 +405,55 @@ def generation_harness(run_dir: Path) -> dict[str, Any]:
     }
 
 
+def recorded_task_meta(run_dir: Path) -> dict[str, Any]:
+    """Return the per-task provenance recorded for a run, if any."""
+    value = _read_generation_config(run_dir).get("task_meta")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+# Provenance fields that make a task re-usable. A change to any of them is
+# refused instead of silently evaluating different source.
+_PROVENANCE_IDENTITY = ("suite", "source", "source_revision", "task_hash")
+
+
+def _provenance_conflict(recorded: dict, current: dict) -> str | None:
+    """Return the first provenance field that changed, if any."""
+    for key in _PROVENANCE_IDENTITY:
+        old, new = recorded.get(key), current.get(key)
+        if old is None or new is None:
+            continue
+        if str(old) != str(new):
+            return f"{key} {str(old)[:24]!r} -> {str(new)[:24]!r}"
+    return None
+
+
+def verify_task_meta(run_dir: Path, tasks: list[Any]) -> None:
+    """Refuse a task whose recorded provenance no longer matches the corpus.
+
+    Args:
+        run_dir: Run directory that may record per-task provenance.
+        tasks: Tasks about to be generated or evaluated.
+
+    Raises:
+        ValueError: If the suite, source, source revision, or content hash
+            differs from the record.
+    """
+    recorded = recorded_task_meta(run_dir)
+    if not recorded:
+        return
+    for task in tasks:
+        entry = recorded.get(task.task_id)
+        if not isinstance(entry, dict):
+            continue
+        conflict = _provenance_conflict(entry, task.provenance())
+        if conflict:
+            raise ValueError(
+                f"{run_dir} recorded task {task.task_id} with {conflict}; the task "
+                "source or its provenance changed, so this run cannot be reused. "
+                "Restore it or use a new run name."
+            )
+
+
 def sample_dir(run_dir: Path, task_id: str, sample_id: int) -> Path:
     """Return the sample directory path for a task id and sample index."""
     return Path(run_dir) / task_id / f"sample_{sample_id}"
@@ -476,10 +571,33 @@ def sample_complete(
     return (root / kernel_file).is_file() and (root / wrapper_file).is_file()
 
 
+def _task_dirs(
+    run_dir: Path,
+    level: int | None = None,
+    suite: str | None = None,
+) -> list[tuple[str, Path]]:
+    """Return (task id, directory) for every task directory holding samples."""
+    resolved = Path(run_dir)
+    found: dict[str, Path] = {}
+    for sample_path in sorted(resolved.glob("**/sample_*")):
+        if not sample_path.is_dir():
+            continue
+        task_path = sample_path.parent
+        task_id = task_path.relative_to(resolved).as_posix()
+        if "/" not in task_id:
+            continue
+        if level is not None and not task_id.startswith(f"level{level}/"):
+            continue
+        if suite is not None and suite_module.suite_of(task_id) != suite:
+            continue
+        found.setdefault(task_id, task_path)
+    return sorted(found.items(), key=lambda item: (item[0].count("/"), item[0]))
+
+
 def resolve_run_backend(run_dir: Path) -> Backend:
     """Resolve a run's source language and reject mixed candidate artifacts."""
     resolved = Path(run_dir)
-    task_dirs = [p for p in sorted(resolved.glob("level*/*")) if p.is_dir()]
+    task_dirs = [path for _, path in _task_dirs(resolved)]
     present = {
         backend
         for backend in Backend
@@ -497,12 +615,11 @@ def resolve_run_backend(run_dir: Path) -> Backend:
 
 
 def _complete_samples(
-    task_dirs: list[Path], kernel_file: str, wrapper_file: str
+    task_dirs: list[tuple[str, Path]], kernel_file: str, wrapper_file: str
 ) -> list[tuple[str, int, Path]]:
     """Return (task id, sample id, dir) for every complete sample of a backend."""
     found: list[tuple[str, int, Path]] = []
-    for task_dir in task_dirs:
-        task_id = f"{task_dir.parent.name}/{task_dir.name}"
+    for task_id, task_dir in task_dirs:
         for sdir in sorted(task_dir.glob("sample_*")):
             if (sdir / kernel_file).is_file() and (sdir / wrapper_file).is_file():
                 found.append((task_id, int(sdir.name.split("_", 1)[1]), sdir))
@@ -513,14 +630,41 @@ def iter_sample_dirs(
     run_dir: Path,
     level: int | None = None,
     backend: Backend | str | None = None,
+    suite: str | None = None,
 ) -> Iterator[tuple[str, int, Path]]:
     """Yield complete samples whose artifacts agree with the run record."""
     resolved = resolve_run_backend(run_dir)
     if backend is not None and parse_backend(backend) is not resolved:
         raise ValueError(f"requested backend disagrees with {resolved.value} run")
-    pattern = f"level{level}/*" if level is not None else "level*/*"
-    task_dirs = [p for p in sorted(Path(run_dir).glob(pattern)) if p.is_dir()]
-    yield from _complete_samples(task_dirs, *backend_module.sample_files(resolved))
+    yield from _complete_samples(
+        _task_dirs(run_dir, level=level, suite=suite),
+        *backend_module.sample_files(resolved),
+    )
+
+
+def write_eval_result(sample_dir_path: Path, result: dict[str, Any]) -> Path:
+    """Write eval_result.json for a sample (case tasks reuse this file)."""
+    path = Path(sample_dir_path) / "eval_result.json"
+    write_json_atomic(path, result)
+    return path
+
+
+def write_case_results(sample_dir_path: Path, payload: dict[str, Any]) -> Path:
+    """Write per-case results for one sample, keeping the old files intact."""
+    path = Path(sample_dir_path) / "case_results.json"
+    write_json_atomic(path, payload)
+    return path
+
+
+def load_case_results(sample_dir_path: Path) -> dict[str, Any] | None:
+    """Load case_results.json from one sample directory, if present."""
+    path = Path(sample_dir_path) / "case_results.json"
+    if not path.is_file():
+        return None
+    try:
+        return read_json_object(path)
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 def load_eval_result(sample_dir_path: Path) -> dict[str, Any] | None:

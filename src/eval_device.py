@@ -126,6 +126,7 @@ class DeviceEvalRequest(BaseModel):
     peak_tflops: float = 0.0
     l2_clear_size: int = 256 * 1024 * 1024
     backend: str = "ascendc"
+    case: dict[str, Any] = Field(default_factory=dict)
 
 
 def exec_python_source(
@@ -484,6 +485,8 @@ class SampleEvaluator:
             self.get_init_inputs = self.ref_globals["get_init_inputs"]
             self.get_inputs = self.ref_globals["get_inputs"]
             self.custom_check = self.ref_globals.get("custom_check")
+            if self.req.case:
+                self._apply_case(self.req.case)
             model_new_path = self.sample_path / "model_new.py"
             custom_globals = exec_python_source(
                 model_new_path.read_text(encoding="utf-8"),
@@ -491,6 +494,9 @@ class SampleEvaluator:
                 {"__file__": str(model_new_path)},
             )
             self.model_new_cls = custom_globals["ModelNew"]
+            if self.req.case:
+                # The candidate reads the same public global as the reference.
+                custom_globals["CASE_ATTRS"] = dict(self.req.case.get("attrs") or {})
         except Exception as exc:
             return fail_result(
                 compiled=self.compiled, runtime_error=f"module load failed: {exc!r}"
@@ -503,11 +509,46 @@ class SampleEvaluator:
         )
         return None
 
+    def _apply_case(self, case: dict[str, Any]) -> None:
+        """Bind the case inputs and epsilon to the loaded task source."""
+        from .cases import CaseSpec, generate_inputs
+
+        spec = CaseSpec(
+            case_id=int(case.get("case_id", 0)),
+            input_shapes=tuple(
+                tuple(int(v) for v in shape) for shape in case["input_shapes"]
+            ),
+            dtypes=tuple(str(v) for v in case["dtypes"]),
+            attrs=dict(case.get("attrs") or {}),
+            value_range=tuple(float(v) for v in case.get("value_range", [0.0, 1.0])),
+            seed=int(case.get("seed", 0)),
+        )
+        tensors = generate_inputs(spec, self.torch)
+        self.get_inputs = lambda: list(tensors)
+        # Case tasks compare with the NaN-mask and Inf-sign rules.
+        import os
+
+        os.environ["AKB_CASE_COMPARE_TASK"] = "1"
+        # Per-case attributes reach the reference through a module global; the
+        # task reads them with its own accessor.
+        self.ref_globals["CASE_ATTRS"] = dict(spec.attrs)
+        binder = self.ref_globals.get("bind_case")
+        if callable(binder):
+            binder(spec.epsilon)
+        else:
+            hook = self.ref_globals.get("CASE_EPS_GLOBAL")
+            if isinstance(hook, str) and hook in self.ref_globals:
+                self.ref_globals[hook] = spec.epsilon
+
     def _prepare_device(self) -> None:
         """Select the NPU, dtype, and constructor seed."""
         self.torch_device = self.torch.device(self.req.device)
         self.torch.npu.set_device(npu_device_index(self.req.device))
-        self.dtype = torch_dtype_for(self.req.precision)
+        self.dtype = (
+            getattr(self.torch, self.req.case["dtypes"][0])
+            if self.req.case
+            else torch_dtype_for(self.req.precision)
+        )
         seed_torch(self.req.seed)
         self.init_inputs = self.get_init_inputs()
 

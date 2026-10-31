@@ -553,9 +553,99 @@ def build_prompt(
     examples: list[PromptExample] | None = None,
 ) -> str:
     """Assemble the generation prompt for one task and backend pair."""
-    return PromptBuilder(
+    prompt = PromptBuilder(
         task, hardware, backend=backend, build_backend=build_backend, examples=examples
     ).build(mode)
+    block = case_contract(task)
+    if block:
+        # Case tasks also see the structural skeleton of a compiling source.
+        block += KERNEL_SKELETON
+    return prompt + block
+
+
+def case_contract(task: Task) -> str:
+    """Return the multi-case contract block for a task that declares cases.
+
+    The tested epsilon range and the dimension span come from the cases
+    themselves; the official support range and the default are stated once.
+    No case input and no reference implementation is included.
+    """
+    cases = getattr(task, "cases", ())
+    if not cases:
+        return ""
+    dtypes = sorted(
+        {dtype for case in cases for dtype in case.dtypes if isinstance(dtype, str)}
+    )
+    epsilons = sorted({case.epsilon for case in cases})
+    shapes = sorted(
+        {tuple(shape) for case in cases if (shape := case.input_shapes[0]) is not None}
+    )
+    if not shapes:
+        shapes = [(0,)]
+    ranks = sorted({len(shape) for shape in shapes})
+    shown = ", ".join(str(list(shape)) for shape in shapes[:3])
+    more = "" if len(shapes) <= 3 else f" and {len(shapes) - 3} more shapes"
+    return f"""
+
+## Case Contract
+
+The same kernel is evaluated on every case below. Dtype-specific dispatch,
+shape-dependent tiling, specialization, and tuning are all allowed; hardcoding
+one case, one shape, or one epsilon is not.
+
+- Inputs: x with shape (..., D) and gamma with shape (D,); x and gamma share one
+  dtype. The output y has exactly the shape and dtype of x.
+- dtypes: {", ".join(dtypes)}; the input dtype must be preserved.
+- Normalization runs over the last dimension; D is dynamic, not a fixed size.
+- Dimensions: the task definition supports 2 to 8; the cases exercise
+  {ranks[0]} to {ranks[-1]}. Shapes may be non-aligned, e.g.
+  {shown}{more}.
+- epsilon is a runtime parameter: the task definition supports
+  {_OFFICIAL_EPS_RANGE} (default 1e-6), and the cases exercise
+  {min(epsilons):g} to {max(epsilons):g}. Do not hardcode a single value.
+- The output shape follows the operator definition, not `empty_like(x)`: reduce,
+  split, gather, and similar operators change shape, so size the output tensor
+  from the definition before launching.
+
+- Follow the reference RMS definition and its numeric precision, including how
+  NaN and Inf propagate.
+
+Static checks reject the wrapper outright if it contains `try`/`except`,
+`globals()`, `eval`/`exec`, or arithmetic and comparisons on tensors; keep the
+wrapper a thin call into `torch.ops.custom_op` and leave all tensor math to the
+device kernel.
+
+Case attributes (dim or similar) are published to your module as the global
+`CASE_ATTRS` before each forward call; read it to honor the per-case value
+instead of assuming a default.
+
+Kernel entry signature (required so the AKB builder can parse and launch it):
+
+- Write the entry as a literal `__global__ __vector__ void <name>(...)`.
+- Pointer parameters must use explicit `__gm__ T*` types, for example
+  `__gm__ uint8_t*` or `__gm__ float*`, followed by plain scalars.
+- Never use `GM_ADDR` or another alias in the entry parameters.
+- Do not declare `numBlocks` or `stream` yourself; the launcher adds them.
+- On the aicore side use `sqrt`, never `sqrtf`, and cast between floating and
+  integer values through `int32_t` rather than directly.
+- Never make the entry itself a template; templated helpers are fine.
+- dtype dispatch, shape-dependent tiling, and tuning are still allowed.
+
+Minimal shape of a valid entry:
+
+```cpp
+__global__ __vector__ void example_entry(
+    __gm__ uint8_t* x,
+    __gm__ uint8_t* y,
+    uint32_t n)
+{{
+    // kernel body
+}}
+```
+"""
+
+
+_OFFICIAL_EPS_RANGE = "1e-12 to 1"
 
 
 def system_prompt(
@@ -570,3 +660,40 @@ def system_prompt(
     if build is BuildBackend.DEEPJIT:
         return DEEPJIT_SYSTEM_PROMPT
     return SYSTEM_PROMPT
+
+
+KERNEL_SKELETON = """
+
+Shape of a source that compiles (structure only, no operator math):
+
+  #include "kernel_operator.h"
+  class KernelExample {
+  public:
+      __aicore__ inline KernelExample() {}
+      __aicore__ inline void Init(__gm__ uint8_t* x, __gm__ uint8_t* y, uint32_t n)
+      {
+          this->n = n;
+          xGm.SetGlobalBuffer((__gm__ float*)x, n);
+          yGm.SetGlobalBuffer((__gm__ float*)y, n);
+      }
+      __aicore__ inline void Process()
+      {
+          AscendC::LocalMemAllocator<AscendC::Hardware::UB> ub;
+          AscendC::LocalTensor<float> a = ub.Alloc<float>(1024);
+          AscendC::LocalTensor<float> out = ub.Alloc<float>(1024);
+          // copy in with DataCopyPad, compute, copy out; keep flag pairs
+      }
+  private:
+      AscendC::GlobalTensor<float> xGm, yGm;
+      uint32_t n;
+  };
+  __global__ __vector__ void skeleton_entry(
+      __gm__ uint8_t* x, __gm__ uint8_t* y, uint32_t n)
+  {
+      AscendC::InitSocState();
+      KernelExample op;
+      op.Init(x, y, n);
+      op.Process();
+      AscendC::PipeBarrier<PIPE_ALL>();
+  }
+"""

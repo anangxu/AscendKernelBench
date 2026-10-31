@@ -282,3 +282,11 @@ Install pyasc with the wheel that matches the host CANN pairing
 (`python -m pip install pyasc==1.1.1`); generation and offline analysis do not
 import it. See [docs/guide/pyasc-backend.md](docs/guide/pyasc-backend.md) for
 the contract, the JIT semantics, the static checks, and the timing caveats.
+
+## CANN Bench domain tasks
+
+Sixty domain tasks from `hicann/cann-bench` (commit `2d7cd33`) live under
+`domain_benchmarks/cann/`, each with its official files, a reference that
+delegates to the official golden, and one pinned baseline workload. See
+`docs/cann_tasks.md` for provenance, the license situation, how baselines differ
+from the official twenty cases, and how to run the checks.

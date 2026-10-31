@@ -1,0 +1,28 @@
+cases:
+- operator: Add
+  case_id: 1
+  input_shape:
+  - [16, 16]
+  - [16, 16]
+  dtype: [float32, float32]
+  attrs: {}
+  value_range: [-1, 1]
+  note: "fp32"
+- operator: Add
+  case_id: 2
+  input_shape:
+  - [8, 32]
+  - [8, 32]
+  dtype: [float16, float16]
+  attrs: {}
+  value_range: [-1, 1]
+  note: "fp16"
+- operator: Add
+  case_id: 3
+  input_shape:
+  - [64, 128]
+  - [64, 128]
+  dtype: [bfloat16, bfloat16]
+  attrs: {}
+  value_range: [-1, 1]
+  note: "bf16"

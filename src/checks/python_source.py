@@ -119,12 +119,15 @@ def check_model_new(source: str, *, sink: Sink | None = None) -> list[str]:
         Deduplicated human-readable violations; empty means pass.
     """
     code = prepare_python_source(source)
+    # The masked text feeds the text rules; the AST comes from the original
+    # source, because masking string literals can make valid code unparsable.
+    tree_source = source
     violations = run_rules(code, PYTHON_PATTERN_RULES)
     try:
         # Module-level value constants are shape bookkeeping; function names are
         # not, so a helper call stays visible to the checker.
         module_scalars = _collect_module_scalars(
-            ast.parse(code), include_functions=False
+            ast.parse(tree_source), include_functions=False
         )
         violations.extend(
             WrapperSemantics(

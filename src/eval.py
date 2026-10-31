@@ -118,6 +118,7 @@ def eval_sample(
     build_backend: BuildBackend = DEFAULT_BUILD_BACKEND,
     deepjit: DeepJitConfig | None = None,
     harness: dict[str, Any] | None = None,
+    case: object | None = None,
 ) -> dict[str, Any]:
     """Host entry: static check, then isolated worker subprocess.
 
@@ -185,6 +186,7 @@ def eval_sample(
             "memory_bandwidth_gbps": hardware.memory_bandwidth_gbps,
             "peak_tflops": hardware.peak_tflops_for(config.precision),
             "l2_clear_size": l2_clear_bytes(hardware.l2_cache_mb),
+            "case": case.record() if case is not None else {},
         },
         timeout_s=timeout_s,
     )
@@ -195,6 +197,7 @@ def evaluate_run(
     run: str | Path,
     level: int | None = None,
     *,
+    suite: str | None = None,
     on_sample: Callable[[str, int, dict[str, Any]], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Evaluate complete samples in a run and write aggregates.
@@ -202,6 +205,7 @@ def evaluate_run(
     Args:
         run: Run directory name under runs/, or an existing path.
         level: When set, only evaluate samples under level{level}/.
+        suite: When set, only evaluate samples of that task suite.
         on_sample: Called with (task_id, sample_id, result) after each sample.
 
     Returns:
@@ -214,16 +218,36 @@ def evaluate_run(
     """
     run_dir = rundir.resolve_run(run)
     config, hardware, backend, build_backend, deepjit = _load_run_settings(run_dir)
-    samples = list(rundir.iter_sample_dirs(run_dir, level=level, backend=backend))
+    samples = list(
+        rundir.iter_sample_dirs(run_dir, level=level, backend=backend, suite=suite)
+    )
     if not samples:
         if level is not None:
             raise ValueError(f"no samples in {run_dir} for level {level}")
+        if suite is not None:
+            raise ValueError(f"no samples in {run_dir} for suite {suite}")
         raise ValueError(f"no samples in {run_dir}")
 
     harness = rundir.generation_harness(run_dir)
     for task_id, sample_id, sample_path in samples:
+        task = load_task(task_id)
+        rundir.verify_task_meta(run_dir, [task])
+        if task.cases:
+            payload = _evaluate_cases(
+                task,
+                sample_path,
+                hardware=hardware,
+                config=config,
+                backend=backend,
+                build_backend=build_backend,
+                deepjit=deepjit,
+                harness=harness,
+            )
+            if on_sample is not None:
+                on_sample(task_id, sample_id, payload["summary"])
+            continue
         result = eval_sample(
-            load_task(task_id),
+            task,
             sample_path,
             hardware=hardware,
             config=config,
@@ -244,6 +268,105 @@ def evaluate_run(
     rundir.write_eval_results(run_dir, results)
     rundir.write_pass_at_k(run_dir, compute_pass_at_k(results))
     return results
+
+
+def _baseline_cases(task) -> tuple:
+    """Return the pinned baseline case of a CANN task, if one exists."""
+    try:
+        from .cann_baseline import BASELINE_PATH, baseline_case
+    except Exception:
+        return ()
+    if not BASELINE_PATH.is_file():
+        return ()
+    import json
+
+    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get("tasks", {})
+    config = data.get(task.task_id)
+    if not config:
+        return ()
+    return (baseline_case(task.task_id, config, seed=0),)
+
+
+def _evaluate_cases(
+    task, sample_path, *, hardware, config, backend, build_backend, deepjit, harness
+) -> dict:
+    """Run one candidate against every declared case and record each result."""
+    from . import cases as cases_module
+
+    statuses: dict[int, str] = {}
+    records: dict[str, object] = {}
+    # A task with a pinned AKB baseline is scored on that single workload; the
+    # official cases stay available as a separate generalisation suite.
+    chosen = _baseline_cases(task) or task.cases
+    for index, case in enumerate(chosen):
+        result = eval_sample(
+            task,
+            sample_path,
+            hardware=hardware,
+            config=config,
+            backend=backend,
+            build_backend=build_backend,
+            deepjit=deepjit,
+            harness=harness,
+            case=case,
+        )
+        compiled = bool(result.get("compiled"))
+        if result.get("correctness") is True:
+            status = "passed"
+        elif compiled:
+            status = "failed"
+        else:
+            status = "error"
+        statuses[case.case_id] = status
+        metadata = dict(result.get("metadata") or {})
+        records[str(case.case_id)] = {
+            "case": case.record(),
+            "status": status,
+            "compiled": compiled,
+            "correctness": result.get("correctness"),
+            "metadata": metadata,
+        }
+    summary = cases_module.summarize(chosen, statuses).record()
+    for case in chosen[len(statuses) :]:
+        statuses[case.case_id] = "not_run"
+        records[str(case.case_id)] = {"case": case.record(), "status": "not_run"}
+    payload = {"summary": summary, "cases": records}
+    rundir.write_case_results(sample_path, payload)
+    # A candidate counts once: the task-level record carries the case verdict so
+    # eval_results, pass@k, fast_p, and the report see one sample.
+    ran = [record for record in records.values() if record.get("status") != "not_run"]
+    built = [record for record in ran if record.get("compiled")]
+    build_state = (
+        "build_failed"
+        if ran and not built
+        else "built_no_case"
+        if not ran
+        else "built_partial"
+        if len(built) < len(ran)
+        else "built_all"
+    )
+    perf = cases_module.aggregate_speedup(records)
+    task_result = {
+        "compiled": bool(built),
+        "correctness": bool(summary["task_correct"]),
+        "metadata": {
+            "backend": backend.value,
+            "build_backend": build_backend.value,
+            "case_summary": summary,
+            "cases": records,
+            "build_state": build_state,
+            "diagnostic_speedups": perf["diagnostic_speedups"],
+            "timing_method": (
+                "npu_event" if backend.value == "ascendc" else "synchronized_wall"
+            ),
+            "timing_scope": "device" if backend.value == "ascendc" else "end_to_end",
+            "runtime_seconds": (),
+            "speedup": perf["speedup"],
+            "case_speedup": perf["speedup"],
+        },
+    }
+    rundir.write_eval_result(sample_path, task_result)
+    return payload
 
 
 def worker_main(argv: list[str]) -> None:
