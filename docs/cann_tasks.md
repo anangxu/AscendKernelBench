@@ -18,7 +18,8 @@ The repository is MIT. The vendored CANN Bench files carry the **CANN Open
 Software License Agreement Version 2.0** headers, which the upstream project
 applies to those files. They are kept verbatim under `domain_benchmarks/cann/*/official/`
 with their headers intact and are not relicensed. See `domain_benchmarks/cann/NOTICE.md`
-for the scope statement. If a reviewer prefers not to redistribute them, the
+for the scope statement, and `CANN-OSA-2.0-LICENSE.txt` for the full license text
+of the vendored files. If a reviewer prefers not to redistribute them, the
 alternative is to fetch the five files per task from the pinned commit at setup
 time; that switch has not been made.
 
